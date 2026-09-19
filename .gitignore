@@ -1,0 +1,12 @@
+# 构建产物与生成文件
+/target
+/gen
+/gameready.exe
+
+# 运行时数据（便携模式：exe 同级生成，随文件夹迁移，不入库）
+/Data
+
+# IDE / 杂项
+.vscode
+*.log
+*.pdb

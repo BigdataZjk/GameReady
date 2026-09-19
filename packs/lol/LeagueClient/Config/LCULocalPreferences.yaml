@@ -1,0 +1,28 @@
+lol-audio:
+    data:
+        ambientSfxEnabled: false
+        banChampVoEnabled: false
+        musicEnabled: false
+        pickChampVoEnabled: false
+    schemaVersion: 5
+lol-clash:
+    data:
+        simpleStateFlagIds: []
+    schemaVersion: 1
+lol-premade-voice:
+    data:
+        currentCaptureDeviceHandle: "Default System Device"
+        inputVolume: 50
+        vadSensitivity: 65
+    schemaVersion: 1
+lol-user-experience:
+    data:
+        abilityPreviewsDisabled: true
+        hasBeenPromptedForPotatoMode: true
+        lastKnownMachineSpec: 5
+        motionEffectsDisabled: true
+    schemaVersion: 3
+video:
+    data:
+        ZoomScale: 0.800000
+    schemaVersion: 1
