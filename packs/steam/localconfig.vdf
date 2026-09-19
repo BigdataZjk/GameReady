@@ -1,0 +1,1196 @@
+"InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"AutoUpdateWindowEnabled"		"0"
+				"ipv6check_http_state"		"bad"
+				"ipv6check_udp_state"		"bad"
+				"ShaderCacheManager"
+				{
+					"HasCurrentBucket"		"1"
+					"CurrentBucketGPU"		"b1cba676a9c63fc8;82b10cd80b40ff29"
+					"CurrentBucketDriver"		"W2:6675d1edf6e4c680736a640736a58f53;W2:a4d83bdc0820c65675a2816d150d9d90"
+					"App"
+					{
+						"228980"
+						{
+							"ShaderCacheSize"		"0"
+						}
+						"431960"
+						{
+							"ShaderCacheSize"		"0"
+						}
+						"578080"
+						{
+							"ShaderCacheSize"		"0"
+						}
+						"730"
+						{
+							"ShaderCacheSize"		"41547"
+						}
+					}
+					"CommittedDepotManifests"
+					{
+						"228980"		""
+						"431960"		""
+						"578080"		""
+						"730"		"62648387_3153179031775066792_41547_nvidiav1\\GLCache\\6675d1edf6e4c680736a640736a58f53\\b1cba676a9c63fc8\\steam_shader_cache.bin,nvidiav1\\GLCache\\6675d1edf6e4c680736a640736a58f53\\b1cba676a9c63fc8\\steam_shader_cache.toc"
+					}
+				}
+				"CMWebSocket"
+				{
+					"cmp3-hkg1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"1789055484"
+						"dc"		"hkg1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"ext1-maa2.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp2-dfw2.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"dfw2"
+					}
+					"ext1-bom2.steamserver.net:27033"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"cmp1-tyo3.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"tyo3"
+					}
+					"ext1-maa2.steamserver.net:27022"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp2-syd1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"syd1"
+					}
+					"cmp1-seo1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"seo1"
+					}
+					"cmp1-sea1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sea1"
+						"LastPingValue"		"303"
+						"LastLoadValue"		"1"
+					}
+					"cmp2-lhr1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lhr1"
+					}
+					"ext1-par1.steamserver.net:27022"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:27038"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:27032"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"cmp2-fra1.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra2"
+					}
+					"cmp2-fra2.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra1"
+					}
+					"cmp2-fra2.steamserver.net:27024"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra2"
+					}
+					"ext2-par1.steamserver.net:27038"
+					{
+						"LastPingTimestamp"		"1789054948"
+						"dc"		"par1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"ext1-maa2.steamserver.net:27030"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp2-tyo3.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"1789055485"
+						"dc"		"tyo3"
+						"LastPingValue"		"102"
+						"LastLoadValue"		"25"
+					}
+					"ext2-maa2.steamserver.net:27031"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp3-hkg1.steamserver.net:27024"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-dfw2.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"dfw2"
+						"LastPingValue"		"304"
+						"LastLoadValue"		"13"
+					}
+					"ext2-maa2.steamserver.net:27030"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp1-seo1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"1788662780"
+						"dc"		"seo1"
+						"LastPingValue"		"116"
+						"LastLoadValue"		"32"
+					}
+					"cmp1-lax1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"1789055486"
+						"dc"		"lax1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp1-atl3.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"atl3"
+					}
+					"cmp2-lhr1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lhr1"
+					}
+					"ext1-par1.steamserver.net:27034"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:27023"
+					{
+						"LastPingTimestamp"		"1788662782"
+						"dc"		"par1"
+						"LastPingValue"		"242"
+						"LastLoadValue"		"35"
+					}
+					"ext1-par1.steamserver.net:27028"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"cmp1-ams1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"ams1"
+					}
+					"cmp2-fra2.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra1"
+					}
+					"cmp2-fra1.steamserver.net:27024"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra2"
+					}
+					"cmp1-atl3.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"atl3"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp2-sgp1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"1789055486"
+						"dc"		"sgp1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp3-hkg1.steamserver.net:27023"
+					{
+						"LastPingTimestamp"		"1788617865"
+						"dc"		"hkg1"
+						"LastPingValue"		"53"
+						"LastLoadValue"		"43"
+					}
+					"ext1-maa2.steamserver.net:27031"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp1-hkg1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-lax1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lax1"
+						"LastPingValue"		"240"
+						"LastLoadValue"		"7"
+					}
+					"ext2-maa2.steamserver.net:27035"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-bom2.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"cmp2-seo1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"seo1"
+					}
+					"cmp2-ord1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"ord1"
+					}
+					"cmp2-lhr1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lhr1"
+					}
+					"ext1-par1.steamserver.net:27025"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext2-par1.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:27030"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:27036"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"cmp2-fra1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra1"
+					}
+					"cmp1-fra1.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra2"
+					}
+					"cmp1-fra2.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra2"
+					}
+					"cmp2-hkg1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"ext2-maa2.steamserver.net:27022"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp2-sea1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"1789055487"
+						"dc"		"sea1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"ext2-bom2.steamserver.net:27036"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"cmp1-tyo3.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"1789055484"
+						"dc"		"tyo3"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp1-iad1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"iad1"
+					}
+					"ext2-maa2.steamserver.net:27025"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp1-seo1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"seo1"
+					}
+					"cmp1-sea1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sea1"
+					}
+					"cmp2-atl3.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"atl3"
+					}
+					"cmp1-lhr1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lhr1"
+					}
+					"ext2-par1.steamserver.net:27036"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext2-par1.steamserver.net:27034"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"ext1-par1.steamserver.net:27029"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"par1"
+					}
+					"cmp2-fra2.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra1"
+					}
+					"cmp1-fra1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra1"
+					}
+					"cmp1-fra2.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"fra1"
+					}
+					"cmp1-hkg1.steamserver.net:27022"
+					{
+						"LastPingTimestamp"		"1789055484"
+						"dc"		"hkg1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp2-hkg1.steamserver.net:27025"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp3-hkg1.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-hkg1.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-hkg1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-hkg1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-hkg1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp3-hkg1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-hkg1.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-hkg1.steamserver.net:27024"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-tyo3.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"1789055484"
+						"dc"		"tyo3"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp1-hkg1.steamserver.net:27023"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-hkg1.steamserver.net:27025"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp3-hkg1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-hkg1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-hkg1.steamserver.net:27024"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-hkg1.steamserver.net:27023"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp1-tyo3.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"tyo3"
+					}
+					"cmp3-hkg1.steamserver.net:27022"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"hkg1"
+					}
+					"cmp2-tyo3.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"tyo3"
+					}
+					"cmp2-tyo3.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"tyo3"
+					}
+					"cmp2-tyo3.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"tyo3"
+					}
+					"cmp2-hkg1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"1789055485"
+						"dc"		"hkg1"
+						"LastPingValue"		"99"
+						"LastLoadValue"		"42"
+					}
+					"cmp2-sgp1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"1789055486"
+						"dc"		"sgp1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp2-sgp1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"1789055486"
+						"dc"		"sgp1"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"cmp1-sgp1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sgp1"
+					}
+					"cmp1-sgp1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sgp1"
+					}
+					"cmp2-sgp1.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sgp1"
+					}
+					"cmp1-sgp1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sgp1"
+					}
+					"cmp1-sgp1.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sgp1"
+					}
+					"cmp2-lax1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lax1"
+					}
+					"cmp2-lax1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"lax1"
+					}
+					"cmp1-dfw2.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"dfw2"
+					}
+					"cmp2-ord1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"ord1"
+					}
+					"cmp1-dfw2.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"dfw2"
+					}
+					"cmp1-ord1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"ord1"
+					}
+					"cmp1-ord1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"ord1"
+					}
+					"cmp2-sea1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"sea1"
+					}
+					"cmp1-iad1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"iad1"
+					}
+					"cmp2-atl3.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"atl3"
+					}
+					"cmp2-iad1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"iad1"
+					}
+					"cmp2-iad1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"iad1"
+					}
+					"ext1-maa2.steamserver.net:27025"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27038"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27036"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27029"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27036"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27034"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27021"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27033"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27038"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27033"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27028"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27020"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27034"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27024"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27029"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27037"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext1-maa2.steamserver.net:27032"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:27032"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"ext2-maa2.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"maa2"
+					}
+					"cmp1-syd1.steamserver.net:443"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"syd1"
+					}
+					"cmp1-syd1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"syd1"
+					}
+					"cmp2-syd1.steamserver.net:27018"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"syd1"
+					}
+					"ext1-bom2.steamserver.net:27035"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"ext2-bom2.steamserver.net:27034"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"ext2-bom2.steamserver.net:27033"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"ext2-bom2.steamserver.net:27025"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"ext2-bom2.steamserver.net:27019"
+					{
+						"LastPingTimestamp"		"1789055487"
+						"dc"		"bom2"
+						"LastPingValue"		"100000"
+						"LastLoadValue"		"0"
+					}
+					"ext2-bom2.steamserver.net:27023"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"ext2-bom2.steamserver.net:27032"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+					"ext2-bom2.steamserver.net:27031"
+					{
+						"LastPingTimestamp"		"0"
+						"dc"		"bom2"
+					}
+				}
+				"RecentWebSocket443Failures"		""
+				"RecentWebSocketNon443Failures"		"1789055487"
+				"RecentUDPFailures"		""
+				"RecentTCPFailures"		""
+				"CellIDServerOverride"		"46"
+				"MTBF"		"659541750"
+				"cip"		"02000000360e6e05e297a46c0000527e7256"
+				"SurveyDate"		"2026-05-09"
+				"SurveyDateVersion"		"-1059604888589834192"
+				"SurveyDateType"		"3"
+				"Rate"		"30000"
+				"LastConfigstoreUploadTime"		"1789056935"
+				"depots"
+				{
+					"431960"
+					{
+						"DecryptionKey"		"db983bc58a8cb46d89d1d70cc962cc733956e6124c4025a0c932f82b3c37144a"
+					}
+					"578081"
+					{
+						"DecryptionKey"		"74eea6f9f5b0c0deea249bea435370fe734f552a55e1aca5b09ff4f3990ad53e"
+					}
+					"578082"
+					{
+						"DecryptionKey"		"6cbd9e8da0339346aeaafb966fd6a173ee898929b9ba4349550c5489234dbac7"
+					}
+					"228985"
+					{
+						"DecryptionKey"		"21a2f639584d9bd462c5c4b3e10f881cba8a17ae674c830c4f083551cd356e9c"
+					}
+					"228986"
+					{
+						"DecryptionKey"		"51dd3611d28621644730736f3bb1fd6b960053a45cd79123f2b9a80c9181dad5"
+					}
+					"228987"
+					{
+						"DecryptionKey"		"cf0622b6dec67606fdc42e7afa5ede78cb33e38dfab82670c5ec7e1404e4984e"
+					}
+					"228988"
+					{
+						"DecryptionKey"		"1845444d5e2cfd0ae65ae4a8fedb6e2fbf776fcc5b913ab4ac461bc9a74f8358"
+					}
+					"228989"
+					{
+						"DecryptionKey"		"ad69276eb476cf06c40312df7376d63deac0c838b9a2767005be8bb306ffb853"
+					}
+					"228990"
+					{
+						"DecryptionKey"		"44d8c45ce229a11c4f231a3d2a350eaf80b0d69a8af938ec7ccca720f694b0e8"
+					}
+					"229001"
+					{
+						"DecryptionKey"		"ec23e1a1e1da6205722291f91bf72d1989cb347245e5a14d8d514c4ad5ba4e97"
+					}
+					"732"
+					{
+						"DecryptionKey"		"da1f76913633e9ce1b2bda5ec464dc507205388fac5c4c614b6a2706cdbd0912"
+					}
+					"731"
+					{
+						"DecryptionKey"		"bca9a9cde94bb4dff61849c6a87230ee45867a590fdd28826366e35e7d62c08e"
+					}
+					"735"
+					{
+						"DecryptionKey"		"a0ef69f0cf8abd70aa9ed79755fbe4d98cf7c6723ba9e0c66e0f7102e49541e6"
+					}
+					"736"
+					{
+						"DecryptionKey"		"e81988c241b4ec9fc7fe1ab34697689f131a48c78da95c985ed347fb43bdc6de"
+					}
+					"737"
+					{
+						"DecryptionKey"		"c80f96efa325374c18c6d5d63ccd2687b1680a908c6def5c5c808e695f1ddbf9"
+					}
+					"738"
+					{
+						"DecryptionKey"		"fbc1a292c9b75e33512ed82476267efbf34f1ed1b177651ed8b091cf7174d183"
+					}
+					"2347770"
+					{
+						"DecryptionKey"		"b23a737920b6a72f932a5bcdbdf51770d7d4d394a13f95b1cf29db28c1043d88"
+					}
+					"2347771"
+					{
+						"DecryptionKey"		"b80e2b4bd2a244ba996a013850b5d2f46c897f382164181b382c5d672fcb5090"
+					}
+					"2347774"
+					{
+						"DecryptionKey"		"71e79678830ea0234437b03526e2ede2decfed847ce20bae413718b47db44bea"
+					}
+					"730"
+					{
+						"DecryptionKey"		"2e61570111ad4d1e4abcb711576f96b84907a024f9f9bf4a4d692d7c132ee91b"
+					}
+				}
+				"RecentDownloadRate"		"22086779"
+				"Apps"
+				{
+					"7"
+					{
+						"cloud"
+						{
+							"last_sync_state"		"synchronized"
+						}
+					}
+					"730"
+					{
+						"LastPlayed"		"1787757098"
+						"Playtime"		"44073"
+						"PlaytimeDisconnected"		"1"
+					}
+					"431960"
+					{
+						"LastPlayed"		"1787754745"
+						"Playtime"		"15953"
+						"PlaytimeDisconnected"		"6"
+					}
+					"550650"
+					{
+						"LastPlayed"		"1574592915"
+						"Playtime"		"430"
+					}
+					"578080"
+					{
+						"LastPlayed"		"1789228498"
+						"Playtime2wks"		"92"
+						"Playtime"		"77351"
+					}
+					"622590"
+					{
+						"LastPlayed"		"1596844890"
+						"Playtime"		"9"
+					}
+					"625340"
+					{
+						"LastPlayed"		"1632836693"
+						"Playtime"		"49"
+					}
+					"813000"
+					{
+						"LastPlayed"		"1554776936"
+						"Playtime"		"2"
+					}
+					"1222700"
+					{
+						"LastPlayed"		"1643448089"
+						"Playtime"		"7"
+					}
+					"1237970"
+					{
+						"LastPlayed"		"1643268073"
+						"Playtime"		"52"
+					}
+					"1426210"
+					{
+						"LastPlayed"		"1721485121"
+						"Playtime"		"1118"
+					}
+					"1504980"
+					{
+						"LastPlayed"		"1643446981"
+						"Playtime"		"354"
+					}
+					"760"
+					{
+						"cloud"
+						{
+							"quota_bytes"		"20000000000"
+							"quota_files"		"50000"
+							"used_bytes"		"0"
+							"used_files"		"0"
+						}
+					}
+					"2371090"
+					{
+						"cloud"
+						{
+							"last_sync_state"		"synchronized"
+						}
+					}
+				}
+				"LastPlayedTimesSyncTime"		"1789228498"
+			}
+		}
+	}
+	"SDL_GamepadBind"		"03000000de280000ff11000001000000,Steam Virtual Gamepad,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,leftshoulder:b4,leftstick:b8,lefttrigger:+a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b9,righttrigger:-a2,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Windows,
+03000000de280000ff11000000000000,Steam Virtual Gamepad,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,leftshoulder:b4,leftstick:b8,lefttrigger:+a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b9,righttrigger:-a2,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Windows,
+03000000de280000ff11000000007701,Steam Virtual Gamepad,a:b0,b:b1,x:b2,y:b3,back:b6,start:b7,leftstick:b8,rightstick:b9,leftshoulder:b4,rightshoulder:b5,dpup:b10,dpdown:b12,dpleft:b13,dpright:b11,leftx:a1,lefty:a0~,rightx:a3,righty:a2~,lefttrigger:a4,righttrigger:a5,"
+	"streaming"
+	{
+		"ClientID"		"8839938369858359801"
+	}
+	"UpdateRates"
+	{
+		"1:47bc704fbefed30e"		"172474579065"
+		"2:47bc704fbefed30e"		"34507650"
+		"3:47bc704fbefed30e"		"500780905"
+		"6:47bc704fbefed30e"		"80511635535"
+		"1:6159761a0e17366b"		"23815759"
+		"2:6159761a0e17366b"		"1448761"
+		"3:6159761a0e17366b"		"2086239"
+		"6:6159761a0e17366b"		"55436327"
+	}
+	"WebStorage"
+	{
+		"DownloadsStoreRecentlyCompleted"		"{\"version\":2,\"data\":[{\"appid\":730,\"active\":false,\"paused\":false,\"completed\":true,\"deferred_time\":0,\"queue_index\":-1,\"update_result\":0,\"update_error\":\"\",\"completed_time\":1789055049,\"buildid\":24957633,\"target_buildid\":25218825,\"launch_on_completion\":false,\"update_type_info\":[{\"has_update\":true,\"completed_update\":true,\"estimated_time_remaining_sec\":0,\"progress\":[{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":895583152,\"bytes_total\":895583152,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":391497600,\"bytes_total\":391497600,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":895583152,\"bytes_total\":895583152,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":895583152,\"bytes_total\":895583152,\"estimated_time_remaining_sec\":0}],\"overall_percent_complete\":100,\"overall_estimated_time_remaining_sec\":0},{\"has_update\":false,\"completed_update\":false,\"estimated_time_remaining_sec\":-1,\"progress\":[{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1}],\"overall_percent_complete\":0,\"overall_estimated_time_remaining_sec\":-1},{\"has_update\":false,\"completed_update\":false,\"estimated_time_remaining_sec\":-1,\"progress\":[{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1}],\"overall_percent_complete\":0,\"overall_estimated_time_remaining_sec\":-1}]},{\"appid\":578080,\"active\":false,\"paused\":false,\"completed\":true,\"deferred_time\":0,\"queue_index\":-1,\"update_result\":0,\"update_error\":\"\",\"completed_time\":1788585611,\"buildid\":0,\"target_buildid\":25049128,\"launch_on_completion\":false,\"update_type_info\":[{\"has_update\":true,\"completed_update\":true,\"estimated_time_remaining_sec\":0,\"progress\":[{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":23984852337,\"bytes_total\":23984852337,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":324035808,\"bytes_total\":324035808,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":23984852337,\"bytes_total\":23984852337,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":0},{\"bytes_in_progress\":23984852337,\"bytes_total\":23984852337,\"estimated_time_remaining_sec\":0}],\"overall_percent_complete\":100,\"overall_estimated_time_remaining_sec\":0},{\"has_update\":false,\"completed_update\":false,\"estimated_time_remaining_sec\":-1,\"progress\":[{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1}],\"overall_percent_complete\":0,\"overall_estimated_time_remaining_sec\":-1},{\"has_update\":false,\"completed_update\":false,\"estimated_time_remaining_sec\":-1,\"progress\":[{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1},{\"bytes_in_progress\":0,\"bytes_total\":0,\"estimated_time_remaining_sec\":-1}],\"overall_percent_complete\":0,\"overall_estimated_time_remaining_sec\":-1}]}]}"
+		"Auth"
+		{
+			"AlwaysShowUserChooser"		"0"
+		}
+		"SteamVoiceSettings_852859302"		"{\"inputGain\":1,\"outputGain\":1,\"noiseGateLevel\":2,\"noiseCancellation\":true,\"echoCancellation\":true,\"autoGainControl\":true,\"selectedMic\":\"default\",\"selectedOutput\":\"default\",\"pttSoundsEnabled\":true,\"hasResetOpenMicHotKey\":true,\"useSteamAudioSpatialization\":false}"
+		"CachedNotificationPreferences"		"[{\"notification_type\":2,\"notification_targets\":11},{\"notification_type\":3,\"notification_targets\":1},{\"notification_type\":4,\"notification_targets\":1},{\"notification_type\":5,\"notification_targets\":11},{\"notification_type\":6,\"notification_targets\":11},{\"notification_type\":8,\"notification_targets\":3},{\"notification_type\":9,\"notification_targets\":11},{\"notification_type\":11,\"notification_targets\":3},{\"notification_type\":12,\"notification_targets\":11},{\"notification_type\":15,\"notification_targets\":11},{\"notification_type\":16,\"notification_targets\":11},{\"notification_type\":17,\"notification_targets\":11},{\"notification_type\":18,\"notification_targets\":11},{\"notification_type\":19,\"notification_targets\":11},{\"notification_type\":20,\"notification_targets\":11},{\"notification_type\":21,\"notification_targets\":11},{\"notification_type\":22,\"notification_targets\":11},{\"notification_type\":28,\"notification_targets\":1}]"
+		"CachedStorePreferences"		"{\"eReviewScorePreference\":0,\"content_descriptor_preferences\":{\"content_descriptors_to_exclude\":[]},\"provide_deck_feedback\":0,\"game_frame_rate_reporting\":0,\"primary_language\":-1,\"secondary_languages\":0}"
+		"CachedCommunityPreferences"		"{\"bParenthesizeNicknames\":false,\"eTextFilterSetting\":1,\"bTextFilterIgnoreFriends\":true,\"content_descriptor_preferences\":{\"content_descriptors_to_exclude\":[]}}"
+		"LocalizedTagNames2_schinese"		"{\"version_hash\":\"488063772\",\"tags\":[{\"tagid\":9,\"name\":\"策略\"},{\"tagid\":19,\"name\":\"动作\"},{\"tagid\":21,\"name\":\"冒险\"},{\"tagid\":84,\"name\":\"设计与插画\"},{\"tagid\":87,\"name\":\"实用工具\"},{\"tagid\":113,\"name\":\"免费开玩\"},{\"tagid\":122,\"name\":\"角色扮演\"},{\"tagid\":128,\"name\":\"大型多人在线\"},{\"tagid\":492,\"name\":\"独立\"},{\"tagid\":493,\"name\":\"抢先体验\"},{\"tagid\":597,\"name\":\"休闲\"},{\"tagid\":599,\"name\":\"模拟\"},{\"tagid\":699,\"name\":\"竞速\"},{\"tagid\":701,\"name\":\"体育\"},{\"tagid\":784,\"name\":\"视频制作\"},{\"tagid\":809,\"name\":\"照片编辑\"},{\"tagid\":872,\"name\":\"动画制作和建模\"},{\"tagid\":1027,\"name\":\"音频制作\"},{\"tagid\":1036,\"name\":\"教育\"},{\"tagid\":1445,\"name\":\"软件培训\"},{\"tagid\":1616,\"name\":\"火车\"},{\"tagid\":1621,\"name\":\"音乐\"},{\"tagid\":1625,\"name\":\"平台游戏\"},{\"tagid\":1628,\"name\":\"类银河战士恶魔城\"},{\"tagid\":1637,\"name\":\"狗\"},{\"tagid\":1638,\"name\":\"Dog\"},{\"tagid\":1643,\"name\":\"建造\"},{\"tagid\":1644,\"name\":\"驾驶\"},{\"tagid\":1645,\"name\":\"塔防\"},{\"tagid\":1646,\"name\":\"砍杀\"},{\"tagid\":1647,\"name\":\"西部\"},{\"tagid\":1651,\"name\":\"讽刺\"},{\"tagid\":1654,\"name\":\"放松\"},{\"tagid\":1659,\"name\":\"僵尸\"},{\"tagid\":1662,\"name\":\"生存\"},{\"tagid\":1663,\"name\":\"第一人称射击\"},{\"tagid\":1664,\"name\":\"解谜\"},{\"tagid\":1665,\"name\":\"三消\"},{\"tagid\":1666,\"name\":\"卡牌游戏\"},{\"tagid\":1667,\"name\":\"恐怖\"},{\"tagid\":1669,\"name\":\"可模组化\"},{\"tagid\":1670,\"name\":\"4X\"},{\"tagid\":1671,\"name\":\"超级英雄\"},{\"tagid\":1673,\"name\":\"外星人\"},{\"tagid\":1674,\"name\":\"打字\"},{\"tagid\":1676,\"name\":\"即时战略\"},{\"tagid\":1677,\"name\":\"回合制\"},{\"tagid\":1678,\"name\":\"战争\"},{\"tagid\":1680,\"name\":\"劫掠\"},{\"tagid\":1681,\"name\":\"海盗\"},{\"tagid\":1684,\"name\":\"奇幻\"},{\"tagid\":1685,\"name\":\"合作\"},{\"tagid\":1687,\"name\":\"潜行\"},{\"tagid\":1688,\"name\":\"忍者\"},{\"tagid\":1693,\"name\":\"经典\"},{\"tagid\":1695,\"name\":\"开放世界\"},{\"tagid\":1697,\"name\":\"第三人称\"},{\"tagid\":1698,\"name\":\"指向点击\"},{\"tagid\":1702,\"name\":\"制作\"},{\"tagid\":1708,\"name\":\"战术\"},{\"tagid\":1710,\"name\":\"超现实\"},{\"tagid\":1714,\"name\":\"迷幻\"},{\"tagid\":1716,\"name\":\"类 Rogue\"},{\"tagid\":1717,\"name\":\"六角格棋盘\"},{\"tagid\":1718,\"name\":\"多人在线战术竞技\"},{\"tagid\":1719,\"name\":\"喜剧\"},{\"tagid\":1720,\"name\":\"迷宫探索\"},{\"tagid\":1721,\"name\":\"心理恐怖\"},{\"tagid\":1723,\"name\":\"动作即时战略\"},{\"tagid\":1730,\"name\":\"推箱子\"},{\"tagid\":1732,\"name\":\"体素\"},{\"tagid\":1733,\"name\":\"Unforgiving\"},{\"tagid\":1734,\"name\":\"快节奏\"},{\"tagid\":1738,\"name\":\"隐藏物体\"},{\"tagid\":1741,\"name\":\"回合战略\"},{\"tagid\":1742,\"name\":\"剧情丰富\"},{\"tagid\":1743,\"name\":\"格斗\"},{\"tagid\":1746,\"name\":\"篮球\"},{\"tagid\":1751,\"name\":\"漫画\"},{\"tagid\":1752,\"name\":\"节奏\"},{\"tagid\":1753,\"name\":\"滑板\"},{\"tagid\":1754,\"name\":\"大型多人在线角色扮演\"},{\"tagid\":1755,\"name\":\"太空\"},{\"tagid\":1756,\"name\":\"好评原声音轨\"},{\"tagid\":1759,\"name\":\"永久死亡\"},{\"tagid\":1770,\"name\":\"棋盘游戏\"},{\"tagid\":1773,\"name\":\"街机\"},{\"tagid\":1774,\"name\":\"射击\"},{\"tagid\":1775,\"name\":\"玩家对战\"},{\"tagid\":1776,\"name\":\"谍战\"},{\"tagid\":1777,\"name\":\"蒸汽朋克\"},{\"tagid\":3796,\"name\":\"小说改编\"},{\"tagid\":3798,\"name\":\"横向滚屏\"},{\"tagid\":3799,\"name\":\"视觉小说\"},{\"tagid\":3810,\"name\":\"沙盒\"},{\"tagid\":3813,\"name\":\"即时战术\"},{\"tagid\":3814,\"name\":\"第三人称射击\"},{\"tagid\":3834,\"name\":\"探索\"},{\"tagid\":3835,\"name\":\"后末日\"},{\"tagid\":3839,\"name\":\"第一人称\"},{\"tagid\":3841,\"name\":\"本地合作\"},{\"tagid\":3843,\"name\":\"在线合作\"},{\"tagid\":3854,\"name\":\"故事架构丰富 \"},{\"tagid\":3859,\"name\":\"多人\"},{\"tagid\":3871,\"name\":\"2D\"},{\"tagid\":3877,\"name\":\"精确平台\"},{\"tagid\":3878,\"name\":\"竞技\"},{\"tagid\":3916,\"name\":\"老式\"},{\"tagid\":3920,\"name\":\"烹饪\"},{\"tagid\":3934,\"name\":\"沉浸式\"},{\"tagid\":3942,\"name\":\"科幻\"},{\"tagid\":3952,\"name\":\"哥特\"},{\"tagid\":3954,\"name\":\"Rail Shooter\"},{\"tagid\":3955,\"name\":\"角色动作\"},{\"tagid\":3959,\"name\":\"轻度 Rogue\"},{\"tagid\":3964,\"name\":\"像素图形\"},{\"tagid\":3965,\"name\":\"史诗级\"},{\"tagid\":3968,\"name\":\"物理\"},{\"tagid\":3978,\"name\":\"生存恐怖\"},{\"tagid\":3987,\"name\":\"历史\"},{\"tagid\":3993,\"name\":\"战斗\"},{\"tagid\":4004,\"name\":\"复古\"},{\"tagid\":4026,\"name\":\"低容错\"},{\"tagid\":4036,\"name\":\"跑酷\"},{\"tagid\":4046,\"name\":\"龙\"},{\"tagid\":4057,\"name\":\"魔法\"},{\"tagid\":4064,\"name\":\"惊悚\"},{\"tagid\":4085,\"name\":\"动漫\"},{\"tagid\":4094,\"name\":\"极简主义\"},{\"tagid\":4102,\"name\":\"战斗竞速\"},{\"tagid\":4106,\"name\":\"动作冒险\"},{\"tagid\":4115,\"name\":\"赛博朋克\"},{\"tagid\":4136,\"name\":\"欢乐\"},{\"tagid\":4137,\"name\":\"超人类主义\"},{\"tagid\":4145,\"name\":\"电影式\"},{\"tagid\":4150,\"name\":\"二战\"},{\"tagid\":4155,\"name\":\"职业导向\"},{\"tagid\":4158,\"name\":\"清版动作\"},{\"tagid\":4161,\"name\":\"即时\"},{\"tagid\":4162,\"name\":\"Kids\"},{\"tagid\":4166,\"name\":\"氛围\"},{\"tagid\":4168,\"name\":\"军事\"},{\"tagid\":4172,\"name\":\"中世纪\"},{\"tagid\":4175,\"name\":\"拟真\"},{\"tagid\":4182,\"name\":\"单人\"},{\"tagid\":4184,\"name\":\"棋类\"},{\"tagid\":4190,\"name\":\"欲罢不能\"},{\"tagid\":4191,\"name\":\"3D\"},{\"tagid\":4195,\"name\":\"卡通风格\"},{\"tagid\":4202,\"name\":\"贸易\"},{\"tagid\":4231,\"name\":\"动作角色扮演\"},{\"tagid\":4234,\"name\":\"短篇\"},{\"tagid\":4236,\"name\":\"刷宝\"},{\"tagid\":4242,\"name\":\"剧集\"},{\"tagid\":4252,\"name\":\"风格化\"},{\"tagid\":4255,\"name\":\"清版射击\"},{\"tagid\":4291,\"name\":\"太空飞船\"},{\"tagid\":4295,\"name\":\"未来\"},{\"tagid\":4305,\"name\":\"彩色\"},{\"tagid\":4325,\"name\":\"回合制战斗\"},{\"tagid\":4328,\"name\":\"城市营造\"},{\"tagid\":4342,\"name\":\"黑暗\"},{\"tagid\":4345,\"name\":\"鲜血\"},{\"tagid\":4364,\"name\":\"大战略\"},{\"tagid\":4376,\"name\":\"Assassin\"},{\"tagid\":4400,\"name\":\"抽象\"},{\"tagid\":4434,\"name\":\"日系角色扮演\"},{\"tagid\":4474,\"name\":\"电脑角色扮演\"},{\"tagid\":4486,\"name\":\"自选历险体验\"},{\"tagid\":4508,\"name\":\"合作战役\"},{\"tagid\":4520,\"name\":\"农场管理\"},{\"tagid\":4535,\"name\":\"矮人\"},{\"tagid\":4559,\"name\":\"快速反应事件\"},{\"tagid\":4562,\"name\":\"卡通\"},{\"tagid\":4598,\"name\":\"架空历史\"},{\"tagid\":4604,\"name\":\"黑暗奇幻\"},{\"tagid\":4608,\"name\":\"剑术\"},{\"tagid\":4637,\"name\":\"俯视射击\"},{\"tagid\":4667,\"name\":\"暴力\"},{\"tagid\":4684,\"name\":\"战争游戏\"},{\"tagid\":4695,\"name\":\"经济\"},{\"tagid\":4711,\"name\":\"重玩价值\"},{\"tagid\":4726,\"name\":\"可爱\"},{\"tagid\":4736,\"name\":\"2D 格斗\"},{\"tagid\":4747,\"name\":\"角色自定义\"},{\"tagid\":4758,\"name\":\"双摇杆射击\"},{\"tagid\":4777,\"name\":\"华丽格斗\"},{\"tagid\":4791,\"name\":\"俯视\"},{\"tagid\":4821,\"name\":\"机甲\"},{\"tagid\":4835,\"name\":\"六自由度\"},{\"tagid\":4840,\"name\":\"4 人本地\"},{\"tagid\":4845,\"name\":\"资本主义\"},{\"tagid\":4852,\"name\":\"台球\"},{\"tagid\":4878,\"name\":\"谐仿\"},{\"tagid\":4885,\"name\":\"弹幕射击\"},{\"tagid\":4947,\"name\":\"爱情\"},{\"tagid\":4975,\"name\":\"2.5D\"},{\"tagid\":4994,\"name\":\"海战\"},{\"tagid\":5030,\"name\":\"反乌托邦\"},{\"tagid\":5055,\"name\":\"电竞\"},{\"tagid\":5125,\"name\":\"程序生成\"},{\"tagid\":5154,\"name\":\"竞分\"},{\"tagid\":5160,\"name\":\"恐龙\"},{\"tagid\":5179,\"name\":\"冷战\"},{\"tagid\":5186,\"name\":\"心理\"},{\"tagid\":5228,\"name\":\"Blood\"},{\"tagid\":5230,\"name\":\"续作\"},{\"tagid\":5300,\"name\":\"上帝模拟\"},{\"tagid\":5348,\"name\":\"模组\"},{\"tagid\":5350,\"name\":\"阖家\"},{\"tagid\":5363,\"name\":\"破坏\"},{\"tagid\":5372,\"name\":\"阴谋\"},{\"tagid\":5379,\"name\":\"2D 平台\"},{\"tagid\":5382,\"name\":\"一战\"},{\"tagid\":5390,\"name\":\"时间竞速\"},{\"tagid\":5395,\"name\":\"3D 平台\"},{\"tagid\":5407,\"name\":\"标杆测试\"},{\"tagid\":5411,\"name\":\"唯美\"},{\"tagid\":5432,\"name\":\"编程\"},{\"tagid\":5502,\"name\":\"黑客\"},{\"tagid\":5537,\"name\":\"平台解谜\"},{\"tagid\":5547,\"name\":\"竞技场射击\"},{\"tagid\":5608,\"name\":\"情感\"},{\"tagid\":5613,\"name\":\"推理\"},{\"tagid\":5652,\"name\":\"收集马拉松\"},{\"tagid\":5673,\"name\":\"现代\"},{\"tagid\":5708,\"name\":\"重制\"},{\"tagid\":5711,\"name\":\"团队导向\"},{\"tagid\":5716,\"name\":\"悬疑\"},{\"tagid\":5727,\"name\":\"棒球\"},{\"tagid\":5752,\"name\":\"机器人\"},{\"tagid\":5765,\"name\":\"枪械改装\"},{\"tagid\":5794,\"name\":\"科学\"},{\"tagid\":5796,\"name\":\"子弹时间\"},{\"tagid\":5851,\"name\":\"等角视角\"},{\"tagid\":5900,\"name\":\"步行模拟\"},{\"tagid\":5914,\"name\":\"网球\"},{\"tagid\":5923,\"name\":\"黑色幽默\"},{\"tagid\":5941,\"name\":\"重启\"},{\"tagid\":5981,\"name\":\"采矿\"},{\"tagid\":6041,\"name\":\"马匹\"},{\"tagid\":6052,\"name\":\"黑色\"},{\"tagid\":6054,\"name\":\"精灵\"},{\"tagid\":6129,\"name\":\"逻辑\"},{\"tagid\":6214,\"name\":\"鸟\"},{\"tagid\":6276,\"name\":\"库存管理\"},{\"tagid\":6310,\"name\":\"外交\"},{\"tagid\":6378,\"name\":\"犯罪\"},{\"tagid\":6426,\"name\":\"选择取向\"},{\"tagid\":6506,\"name\":\"3D 格斗\"},{\"tagid\":6621,\"name\":\"弹球\"},{\"tagid\":6625,\"name\":\"时空操控\"},{\"tagid\":6650,\"name\":\"裸露\"},{\"tagid\":6691,\"name\":\"90 年代\"},{\"tagid\":6702,\"name\":\"火星\"},{\"tagid\":6730,\"name\":\"玩家对战环境\"},{\"tagid\":6815,\"name\":\"手绘\"},{\"tagid\":6835,\"name\":\"扑克\"},{\"tagid\":6869,\"name\":\"非线性\"},{\"tagid\":6910,\"name\":\"海军\"},{\"tagid\":6915,\"name\":\"武术\"},{\"tagid\":6948,\"name\":\"罗马\"},{\"tagid\":6971,\"name\":\"多结局\"},{\"tagid\":7038,\"name\":\"高尔夫\"},{\"tagid\":7107,\"name\":\"即时含暂停\"},{\"tagid\":7108,\"name\":\"社交聚会\"},{\"tagid\":7178,\"name\":\"社交聚会游戏\"},{\"tagid\":7208,\"name\":\"女性主角\"},{\"tagid\":7250,\"name\":\"线性\"},{\"tagid\":7309,\"name\":\"滑雪\"},{\"tagid\":7328,\"name\":\"保龄球\"},{\"tagid\":7332,\"name\":\"基地建设\"},{\"tagid\":7368,\"name\":\"本地多人\"},{\"tagid\":7423,\"name\":\"狙击手\"},{\"tagid\":7432,\"name\":\"洛夫克拉夫特式\"},{\"tagid\":7481,\"name\":\"控制器\"},{\"tagid\":7556,\"name\":\"骰子\"},{\"tagid\":7569,\"name\":\"网格导向动作\"},{\"tagid\":7622,\"name\":\"越野\"},{\"tagid\":7702,\"name\":\"叙事\"},{\"tagid\":7743,\"name\":\"80 年代\"},{\"tagid\":7918,\"name\":\"Dwarf\"},{\"tagid\":7926,\"name\":\"人工智能\"},{\"tagid\":7948,\"name\":\"原声音轨\"},{\"tagid\":8013,\"name\":\"软件\"},{\"tagid\":8075,\"name\":\"TrackIR\"},{\"tagid\":8093,\"name\":\"小游戏\"},{\"tagid\":8122,\"name\":\"关卡编辑\"},{\"tagid\":8253,\"name\":\"基于音乐的程序生成\"},{\"tagid\":8369,\"name\":\"调查\"},{\"tagid\":8666,\"name\":\"奔跑\"},{\"tagid\":8945,\"name\":\"资源管理\"},{\"tagid\":9130,\"name\":\"动漫色情\"},{\"tagid\":9157,\"name\":\"水底\"},{\"tagid\":9204,\"name\":\"沉浸式模拟\"},{\"tagid\":9271,\"name\":\"集换式卡牌游戏\"},{\"tagid\":9541,\"name\":\"恶魔\"},{\"tagid\":9551,\"name\":\"恋爱模拟\"},{\"tagid\":9564,\"name\":\"狩猎\"},{\"tagid\":9592,\"name\":\"动态旁白\"},{\"tagid\":9626,\"name\":\"动物\"},{\"tagid\":9803,\"name\":\"雪\"},{\"tagid\":10235,\"name\":\"生活模拟\"},{\"tagid\":10383,\"name\":\"交通运输\"},{\"tagid\":10397,\"name\":\"网络梗\"},{\"tagid\":10437,\"name\":\"益智问答\"},{\"tagid\":10617,\"name\":\"武士\"},{\"tagid\":10679,\"name\":\"时空旅行\"},{\"tagid\":10695,\"name\":\"团队角色扮演\"},{\"tagid\":10808,\"name\":\"灵异\"},{\"tagid\":10816,\"name\":\"分屏\"},{\"tagid\":11014,\"name\":\"互动小说\"},{\"tagid\":11095,\"name\":\"Boss Rush\"},{\"tagid\":11104,\"name\":\"车辆作战\"},{\"tagid\":11123,\"name\":\"仅鼠标\"},{\"tagid\":11333,\"name\":\"恶人主角\"},{\"tagid\":11634,\"name\":\"维京人\"},{\"tagid\":12057,\"name\":\"教程\"},{\"tagid\":12095,\"name\":\"色情内容\"},{\"tagid\":12190,\"name\":\"拳击\"},{\"tagid\":12472,\"name\":\"管理\"},{\"tagid\":12686,\"name\":\"吸血鬼\"},{\"tagid\":13070,\"name\":\"纸牌\"},{\"tagid\":13276,\"name\":\"坦克\"},{\"tagid\":13382,\"name\":\"射箭\"},{\"tagid\":13577,\"name\":\"航海\"},{\"tagid\":13782,\"name\":\"试验性\"},{\"tagid\":13906,\"name\":\"游戏开发\"},{\"tagid\":14139,\"name\":\"回合制战术\"},{\"tagid\":14720,\"name\":\"怀旧\"},{\"tagid\":14906,\"name\":\"蓄意操控困难\"},{\"tagid\":15045,\"name\":\"飞行\"},{\"tagid\":15172,\"name\":\"Conversation\"},{\"tagid\":15277,\"name\":\"哲理\"},{\"tagid\":15564,\"name\":\"钓鱼\"},{\"tagid\":15868,\"name\":\"摩托车越野\"},{\"tagid\":15954,\"name\":\"无声主角\"},{\"tagid\":16094,\"name\":\"神话\"},{\"tagid\":16250,\"name\":\"赌博\"},{\"tagid\":16598,\"name\":\"太空模拟\"},{\"tagid\":16689,\"name\":\"时间管理\"},{\"tagid\":17015,\"name\":\"狼人\"},{\"tagid\":17305,\"name\":\"策略角色扮演\"},{\"tagid\":17337,\"name\":\"旅鼠\"},{\"tagid\":17389,\"name\":\"桌上游戏\"},{\"tagid\":17770,\"name\":\"异步多人\"},{\"tagid\":17894,\"name\":\"猫\"},{\"tagid\":17927,\"name\":\"Pool\"},{\"tagid\":18594,\"name\":\"全动态影像\"},{\"tagid\":19568,\"name\":\"骑车\"},{\"tagid\":19780,\"name\":\"潜水艇\"},{\"tagid\":19995,\"name\":\"黑色喜剧\"},{\"tagid\":20486,\"name\":\"狼\"},{\"tagid\":21006,\"name\":\"地下\"},{\"tagid\":21635,\"name\":\"语言学习\"},{\"tagid\":21725,\"name\":\"战术角色扮演\"},{\"tagid\":21978,\"name\":\"虚拟现实\"},{\"tagid\":22602,\"name\":\"农业\"},{\"tagid\":22955,\"name\":\"迷你高尔夫\"},{\"tagid\":23491,\"name\":\"清洁\"},{\"tagid\":24003,\"name\":\"文字游戏\"},{\"tagid\":25085,\"name\":\"触控\"},{\"tagid\":25959,\"name\":\"武侠\"},{\"tagid\":26921,\"name\":\"政治模拟\"},{\"tagid\":27758,\"name\":\"声控\"},{\"tagid\":28444,\"name\":\"单板滑雪\"},{\"tagid\":29482,\"name\":\"类魂系列\"},{\"tagid\":30358,\"name\":\"自然\"},{\"tagid\":30927,\"name\":\"Fox\"},{\"tagid\":31275,\"name\":\"基于文字\"},{\"tagid\":31579,\"name\":\"少女游戏\"},{\"tagid\":32322,\"name\":\"牌组构建\"},{\"tagid\":33572,\"name\":\"麻将\"},{\"tagid\":35079,\"name\":\"工作模拟\"},{\"tagid\":37376,\"name\":\"下落方块\"},{\"tagid\":37799,\"name\":\"Combat Flight Simulator\"},{\"tagid\":40500,\"name\":\"Sexual Themes\"},{\"tagid\":42089,\"name\":\"突发惊吓\"},{\"tagid\":42152,\"name\":\"对话丰富\"},{\"tagid\":42329,\"name\":\"Coding\"},{\"tagid\":42804,\"name\":\"动作类 Rogue\"},{\"tagid\":44868,\"name\":\"LGBTQ+\"},{\"tagid\":46348,\"name\":\"动物园\"},{\"tagid\":47827,\"name\":\"摔角\"},{\"tagid\":49213,\"name\":\"英式橄榄球\"},{\"tagid\":52406,\"name\":\"邪教\"},{\"tagid\":56690,\"name\":\"轨道射击\"},{\"tagid\":61357,\"name\":\"电子音乐\"},{\"tagid\":71389,\"name\":\"拼字\"},{\"tagid\":87918,\"name\":\"农场模拟\"},{\"tagid\":91114,\"name\":\"商店管理\"},{\"tagid\":92092,\"name\":\"Jet\"},{\"tagid\":96359,\"name\":\"滑行\"},{\"tagid\":97070,\"name\":\"刺客\"},{\"tagid\":97376,\"name\":\"温馨惬意\"},{\"tagid\":102530,\"name\":\"Elf\"},{\"tagid\":117648,\"name\":\"8-bit 音乐\"},{\"tagid\":123332,\"name\":\"自行车\"},{\"tagid\":129761,\"name\":\"ATV\"},{\"tagid\":150626,\"name\":\"游戏相关\"},{\"tagid\":158638,\"name\":\"板球\"},{\"tagid\":176981,\"name\":\"大逃杀\"},{\"tagid\":180368,\"name\":\"信仰\"},{\"tagid\":189941,\"name\":\"器乐\"},{\"tagid\":198631,\"name\":\"不可思议迷宫\"},{\"tagid\":198913,\"name\":\"摩托车\"},{\"tagid\":220585,\"name\":\"殖民模拟\"},{\"tagid\":252854,\"name\":\"自行车越野\"},{\"tagid\":255534,\"name\":\"自动化\"},{\"tagid\":323922,\"name\":\"无双\"},{\"tagid\":324176,\"name\":\"冰球\"},{\"tagid\":337964,\"name\":\"摇滚乐\"},{\"tagid\":353880,\"name\":\"刷宝射击游戏\"},{\"tagid\":363767,\"name\":\"斯诺克\"},{\"tagid\":379975,\"name\":\"Clicker\"},{\"tagid\":454187,\"name\":\"传统类 Rogue\"},{\"tagid\":507423,\"name\":\"狐狸\"},{\"tagid\":552282,\"name\":\"治愈系\"},{\"tagid\":560542,\"name\":\"增量\"},{\"tagid\":603297,\"name\":\"硬件\"},{\"tagid\":615955,\"name\":\"挂机游戏\"},{\"tagid\":620519,\"name\":\"英雄射击\"},{\"tagid\":723991,\"name\":\"逆弹幕射击\"},{\"tagid\":745697,\"name\":\"社交推理\"},{\"tagid\":760247,\"name\":\"仙侠\"},{\"tagid\":769306,\"name\":\"密室逃脱\"},{\"tagid\":776177,\"name\":\"360 全景视频\"},{\"tagid\":791774,\"name\":\"卡牌战斗\"},{\"tagid\":847164,\"name\":\"排球\"},{\"tagid\":856791,\"name\":\"非对称 VR\"},{\"tagid\":889937,\"name\":\"装饰\"},{\"tagid\":916648,\"name\":\"生物收集\"},{\"tagid\":1023537,\"name\":\"复古射击\"},{\"tagid\":1084988,\"name\":\"自走棋\"},{\"tagid\":1091588,\"name\":\"牌组构建式类 Rogue\"},{\"tagid\":1100686,\"name\":\"疫病爆发模拟\"},{\"tagid\":1100687,\"name\":\"汽车模拟\"},{\"tagid\":1100688,\"name\":\"医疗模拟\"},{\"tagid\":1100689,\"name\":\"开放世界生存制作\"},{\"tagid\":1199779,\"name\":\"撤离射击\"},{\"tagid\":1220528,\"name\":\"爱好模拟\"},{\"tagid\":1239876,\"name\":\"整理\"},{\"tagid\":1254546,\"name\":\"足球\"},{\"tagid\":1254552,\"name\":\"美式橄榄球\"},{\"tagid\":1320952,\"name\":\"桌面伴侣\"},{\"tagid\":1352486,\"name\":\"水豚\"}]}"
+		"PrivateApps_852859302"		"[]"
+		"UIStoreLocalSteamUIState"		"{\"nVersion\":1,\"eGameListView\":1,\"collectionFilter\":{\"nFormatVersion\":2,\"strSearchText\":\"\",\"filterGroups\":[{\"rgOptions\":[1,2],\"bAcceptUnion\":true},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false}],\"setSuggestions\":{}},\"collectionFilterGamepad\":{\"nFormatVersion\":2,\"strSearchText\":\"\",\"filterGroups\":[{\"rgOptions\":[1,2,8192],\"bAcceptUnion\":true},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false}],\"setSuggestions\":{}},\"collectionFilterVR\":{\"nFormatVersion\":2,\"strSearchText\":\"\",\"filterGroups\":[{\"rgOptions\":[1,2,8192],\"bAcceptUnion\":true},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false},{\"rgOptions\":[],\"bAcceptUnion\":false}],\"setSuggestions\":{}},\"bGroupedByCollection\":true,\"bSortedByRecent\":false,\"mapCollapsedState\":[[\"hidden\",true]],\"currentSelection\":{},\"bGroupBySharedLibraries\":false}"
+		"keyboard_haptic_preset"		"2"
+		"keyboard_haptic_custom"		"{\"eHapticType\":2,\"unIntensity\":4,\"ndBGain\":-5}"
+		"keyboard_trackpad_typing_scale"		"1"
+		"keyboard_trackpding_typing_trigger_as_click"		"true"
+		"keyboard_layout"		"{\"currentLayout\":0,\"selectedLayouts\":[2]}"
+		"keyboard_initial_location_desktop"		"\"center-bottom\""
+		"keyboard_initial_location_overlay"		"\"center-bottom\""
+		"CTextFilterStore_TextFilterPreferences_852859302"		"{\"eTextFilterSetting\":1,\"bIgnoreFriends\":1}"
+		"CTextFilterStore_TextFilterWords_852859302"		"KDEpeyJ0ZXh0X2ZpbHRlcl9jdXN0b21fYmFubmVkX3dvcmRzIjpbXSwidGV4dF9maWx0ZXJfY3VzdG9tX2NsZWFuX3dvcmRzIjpbXX0="
+		"trendingstore_storage"		"{\"version\":2,\"data\":[{\"appid\":1172470,\"rgAccountIDs\":[1473631533,1474229025],\"totalFriends\":2},{\"appid\":730,\"rgAccountIDs\":[1473631533,1474229025],\"totalFriends\":2},{\"appid\":2507950,\"rgAccountIDs\":[1473631533],\"totalFriends\":1},{\"appid\":255710,\"rgAccountIDs\":[460112542],\"totalFriends\":1}],\"lastFetchTimeMS\":1789800739342}"
+		"playnextstore_storage"		"{\"nVersion\":3,\"cachedPlayNext\":{\"last_update_time\":1789800739,\"appids\":[]},\"rgIgnoredApps\":[]}"
+		"CTextFilterStore_strBannedPattern_852859302"		"KDEpXGIo77u/5L2g5LuW54yrfOeJueS5iOeahHxtbGdifGYrW3V20YZdK1tr0LpdKyhlZHxlcnxpbmc/KT98XHcqZitbdXbRhl0rW2PRgV0rW2vQul0rXHcqfGMob2M/fGF3KWtcVypzdWM/a1x3KnzQtNC+0LvQsdC+0LXQsdC40LfQvHxjKG98YWh8YXcpYz9rKHN8ZWQpfNC00L7Qu9Cx0LDQtdCx0L7QsnzQtdCx0LvQsNC90YHQutCw0Y980LXQsdC70LDQvdGB0LrQuNC5fNC30LDQtdCx0ZHRiNGM0YHRj3zQt9Cw0YXRg9GP0YfQuNC70Lh80L/QuNC00LDRgNGB0LrQuNC5fNGB0YrQtdCx0LDRgtGM0YHRj3zRg9C10LHQsNC90YHQutC40Ll80YPQtdCx0LjRidGM0L3QvtC1fNCw0YXRg9C10L3QvdCw0Y980LDRhdGD0LXQvdC90YPRjnzQsNGF0YPQtdC90L3Ri9C5fNCy0YvQtdCx0LDQvdC+0LV80LXQsdCw0L3QvdC+0LzRg3zQtdCx0LDQvdGD0YLRi9C1fNC10LHQu9Cw0L3QsNC80Lh80L7RhdGD0LXQvdC90YvQuXzQv9C40LTQsNGA0LDRgdGLfNGD0ZHQsdC40YnQvdCw0Y980YPRkdCx0LjRidC90YvQuXzQstGK0LXQsdCw0LvQuHzQstGK0LXQsdCw0YLRjHzQtdCx0LDQvdC90LDRj3zQtdCx0LDQvdC90L7QtXzQtdCx0LDQvdC90YvRhXzQtdCx0LDQvdC+0LPQvnzQtdCx0LDQvdGM0LrQuHzQtdCx0L7QvdC90L7QtXzQt9Cw0LXQsdCw0LvQsHzQt9Cw0LXQsdCw0LvQvnzQv9C+0LXQsdC10L3RjHzRhdGD0ZHQstC+0LPQvnxjKG98YWh8YXcpYz9rfGN1bW0oZXJ8aW5nKXzQsNGF0YPQtdC70Lh80LTRgNC+0YfQutC4fNC10LHQsNC90LDRj3zQtdCx0LDQvdC+0LV80LXQsdCw0L3QvtC5fNC10LHQsNC90YPRjnzQtdCx0LDQvdGL0LV80LXQsdCw0L3Ri9C5fNC10LHQsNC90YvQvHzQtdCx0LDQvdGL0YV80LXQsdGD0YfQuNC5fNC/0LjQt9C00LXQtnzQv9C40LfQtNC10YZ80YPRkdCx0LjRidCwfNGD0ZHQsdC40YnQtXzRhdGD0LXRgdC+0YF80YXRg9C10YLQvtC5fNGF0YPQudC90ZHQuXzRhdGD0ZHQstCw0Y980YXRg9GR0LLRi9C5fOS9oOWmiOatu+S6hnzlpojnmoTkuKrpgLx85oiR5Y675L2g55qEfGMrdStuK3QrXHcqfNCx0LvRj9C00Yx80LHQu9GP0YLRjHzQtNC+0YXRg9GPfNC00YDQvtGH0Lh80LXQsdCw0LvQvnzQtdCx0LDRgtGMfNC9NNC10LE00Lt80L3QsNGF0YPQuXzQvdCw0YXRg9GPfNC90LXRhdGD0Ll80L3QuNGF0YPRj3zQv9C40LfQtNC1fNC/0LjQt9C00YN80L/QvtGF0YPQuXzRg9C10LHRkdGCfNGF0YPQtdGC0LB80YXRg9C10YLRg3zRhdGD0LnQvdC4fNGF0YPQudC90Y580YXRg9C50L3Rj3zRkdCx0LDQvdGLfOaTjeS9oOWmiHzmk43kvaDlprl86IKP5L2g5aaIfNCw0YXRg9C1fNC10LHQsNC7fNC10LHRg9GCfNGB0YPQutCwfNGF0YPQu9C4fNGF0YPRj9C8fGN1bXNob3R8Y3VtYmFnfGplYmFuZXzQsdC70Y980LXQsdGDfNGF0YPQuHzRhdGD0Ll80YXRg9GPfOWCu+WxhHzlgrvpgLx85pON5q27fOiHremAvHxjdW1zP3xrdXJ3YXxreXN877u/77u/Zlthw6RlXXk/Zytbb2VpdV0rdCtzP3zQv9C40LTQsNGA0LDRgdC+0LJ80LTQsNGD0L3RgdC60LDRj3zQv9C40LTQvtGA0LDRgdGLfGNoaW5nXFcqY2hvbmdzP3xu86CAofOggKFpZ2dlcnN8dG93ZWxcVypoZWFkcz980L/QuNC00L7RgNC60LB8dGluZ1xXKnRvbmdzP3x0cmFubihpZXx5KXM/fGNhbWVsIGpvY2tleXxuaTpnZ1x3Kjpcdyp8cG9yY2ggbW9ua2V5fGNoaW4oY3xrKXM/fG4raStbZ3FdK3M/fHlhbVxXKnlhbXM/fFx3Km5pZ2dhcz98Y2hpbmFtYW5zP3xwb2xhY2tlP3M/fG5lZWtlcmlzP3xuaWdmaGVycz98cmVkc2tpbnM/fGJlYW5lcnM/fGNvb2xpZXM/fGN6YXJudWNofGYrYStnK3MqfGZhZ2dvdHJ5fG5ld2ZhZ3M/fG5pIGdnIGVyfG5pZ2dhXHcqfG5pZ2dsZXM/fG5pZ25vZ3M/fHJ1cytraXM/fHdpZ2dlcnM/fM+cYWdn0L50fGluanVucz98bmlra2FzP3xwaWRhcmFzfHdpZ2dhcz980LhpZ2dlcnxcdypmYWd8YmVhbmVyfGNvb25zP3xkeWtlcz98ZmE2Nm90fGZhZ3RzP3xnb29rcz98Z3lwb3M/fGhvbW9zP3xraWtlcz98c3BpY3M/fHl3bmJhd3zpu5HprLx8Zmd0cz98ZtCwZ3N8amFwcz98cGlkYXJ8dHJvb258d29wcz98ZmFnenxm0LBnfHBha2l8ZkBnfFx3Kk7zoICh86CAoUlHR0XzoICh86CAoVJcdyp8XHcq0YHQstC40L3QvtGB0L7QsdCw0Lpcdyp8XHcqLnVjayA/LmlnZ2VyLj9cdyp8XHcqbmF0ZS4/aGlnZ2Vyc1x3KnxcdyrJtMmqyaLJouG0h8qAXHcqfFx3Km7Rlmdn0LVyXHcqfFx3Kk7DjUdHRVJcdyp8XHcqblxcXHxnZ2VyXHcqfFx3Km5pZ2fQtXJcdyp8XHcqRjRHRzBUXHcqfFx3Kk4xR0czUlx3KnxcdypuaWdnZXJcdyp8XHcqbmlnZzRcdyp8XHcqbmlnZ3pcdyopXGI="
+		"CTextFilterStore_strCleanPattern_852859302"		"KDEpXihcYihzdGFyZG9jayBjb21tdW5pdHkgYXNzaXN0YW50fGhvbW8gc2FwaWVucyBzYXBpZW5zfHRoZSBzZXh5IGNoaW5hbWFufGtvbXBldGVuenRlYW18y5BwbV9wdXNzecuQfOa0vumAgeWRmHxwaW5lZ3JvdmV8cGFwYXRyb29ufG5cLmVcLmlnXC5lXC58am9obiBkaWNrfGZ1a3VzaGltYXxwdXNzeWNhdHxwbV9wdXNzeXxzbmlnZ2VyfG5pZSBnZWV8ZnVrdW9rYXxmdWNoaWFufGNvY2tcLmxpfHBodWtldHxuaWdnbGV8ZnV4aXVzfGZ1Y3Vyb3xuaWVnb3xuaWVib3xuaWViYXxuZWlnZXxuZWdneXxuZWJieXxmdXhpc3xjd2ZhZ3wxNDg4OHxwdWJnfG5pYnl8bmVidXxuZWJvfGZ1a3V8ZnVraXxmYWt0fGcyNHxmY3J8XHcqZnZjaHZvXHcqc3RhcmRvY2sgY29tbXVuaXR5IGFzc2lzdGFudHxob21vIHNhcGllbnMgc2FwaWVuc3x0aGUgc2V4eSBjaGluYW1hbnxmYWsoZWR8ZXJzP3xpbmcpfGtvbXBldGVuenRlYW18y5BwbV9wdXNzecuQfOa0vumAgeWRmHxwaW5lZ3JvdmV8cGFwYXRyb29ufG5cLmVcLmlnXC5lXC58am9obiBkaWNrfGZ1a3VzaGltYXxwdXNzeWNhdHxwbV9wdXNzeXxzbmlnZ2VyfG5pZSBnZWV8ZnVrdW9rYXxmdWNoc2lhfGZ1Y2hpYW58Y29ja1wubGl8cGh1a2V0fG5pZ2dsZXxmdXhpdXN8ZnVjdXJvfG5pZWdvfG5pZWJvfG5pZWJhfG5laWdlfG5lZ2d5fG5lYmJ5fGZ1eGlzfGN3ZmFnfDE0ODg4fHB1Ymd8bmlieXxuZWJ1fG5lYm98ZnVrdXxmdWtpfGZha3R8ZzI0fGZjcnxcdypmdmNodm9cdyopXGIpJA=="
+		"ChatStorePopupState_852859302"		"{\"bFriendsListVisible\":false,\"always_restore\":false,\"bFriendsListCollapsed\":false}"
+		"GetEquippedProfileItemsForUser76561198813125030"		"{\"profile_background\":{\"profile_colors\":[]},\"mini_profile_background\":{\"profile_colors\":[]},\"avatar_frame\":{\"profile_colors\":[]},\"animated_avatar\":{\"profile_colors\":[]},\"profile_modifier\":{\"profile_colors\":[]},\"steam_deck_keyboard_skin\":{\"profile_colors\":[]}}"
+	}
+	"Broadcast"
+	{
+		"Permissions"		"1"
+	}
+	"CloudManager"
+	{
+		"HintAppsToPreload"		""
+	}
+	"system"
+	{
+		"OverlayLogCleanupDone"		"1"
+		"PushToTalkKey"		"0"
+		"InGameOverlayShortcutKey"		"KEY_NONE"
+		"InGameOverlayShowFPSCorner"		"2"
+		"InGameOverlayShowFPSDetailLevel"		"2"
+		"InGameOverlayScreenshotHotKey"		"KEY_NONE"
+		"InGameOverlayScreenshotNotification"		"1"
+		"InGameOverlayScreenshotSaveUncompressed"		"1"
+	}
+	"streaming_v2"
+	{
+		"EnableStreaming"		"1"
+		"DefaultAudioDevice"		"{0.0.0.00000000}.{fda04695-6713-43ba-881a-d0c4891131af}"
+		"DefaultAudioDeviceName"		"扬声器 (Realtek High Definition Audio)"
+		"DefaultMicrophone"		"{0.0.1.00000000}.{f388cf86-1d4c-4cf8-92ce-af2dead30af5}"
+		"DefaultMicrophoneName"		"麦克风 (EMEET SmartCam C60E 4K)"
+	}
+	"friends"
+	{
+		"852859302"
+		{
+			"NameHistory"
+			{
+				"0"		"你怎么又黑屏了呀？"
+			}
+			"avatar"		"8e974bfa6a22ed113fe7ba71d5646c83a05cce2b"
+		}
+		"PersonaName"		"你怎么又黑屏了呀？"
+		"communitypreferences"		"18002000280130013800"
+		"contentdescriptorpreferences"		""
+		"storepreferences"		""
+		"968824934"
+		{
+			"name"		"806852066"
+			"NameHistory"
+			{
+				"0"		"806852066"
+			}
+		}
+		"474664260"
+		{
+			"name"		"一笑奈何"
+			"NameHistory"
+			{
+				"0"		"一笑奈何"
+			}
+			"avatar"		"198983da73ff40d021ada1dc0eb56900538b58e4"
+		}
+		"324210270"
+		{
+			"name"		"dsadqda"
+			"NameHistory"
+			{
+				"0"		"dsadqda"
+			}
+		}
+		"1474229025"
+		{
+			"name"		"速度与激情之有田下山"
+			"NameHistory"
+			{
+				"0"		"速度与激情之有田下山"
+			}
+		}
+		"363302578"
+		{
+			"name"		"薯条战士"
+			"NameHistory"
+			{
+				"0"		"薯条战士"
+			}
+			"avatar"		"c62f8576ea8d8ab122a4c3d412db1c3da42fe5d2"
+		}
+		"1473631533"
+		{
+			"name"		"clbb"
+			"NameHistory"
+			{
+				"0"		"clbb"
+			}
+		}
+		"460112542"
+		{
+			"name"		"speechlesscc"
+			"NameHistory"
+			{
+				"0"		"speechlesscc"
+			}
+			"avatar"		"e5d905fa0116e6c1f6967ef42fe85fa252bce112"
+		}
+		"920297799"
+		{
+			"name"		"YUKI"
+			"NameHistory"
+			{
+				"0"		"YUKI"
+			}
+			"avatar"		"92c669e44bebd106a94c578a07e655ce846891e5"
+		}
+		"Notifications_ShowIngame"		"1"
+		"Notifications_ShowOnline"		"0"
+		"Notifications_ShowMessage"		"1"
+		"Notifications_EventsAndAnnouncements"		"1"
+		"Sounds_PlayIngame"		"0"
+		"Sounds_PlayOnline"		"0"
+		"Sounds_PlayMessage"		"1"
+		"Sounds_EventsAndAnnouncements"		"0"
+		"ChatFlashMode"		"0"
+		"DoNotDisturb"		"0"
+		"SignIntoFriends"		"0"
+	}
+	"SharedAuth"
+	{
+		"id"		"1534069415"
+		"AuthData"		"c3adaaebc8c9ce289bbd1b2c51cde321f0b12f06227cde2b6af43922aeb211e6"
+	}
+	"ParentalSettings"
+	{
+		"settings"		"09a699d532000000004800"
+		"Signature"		"6931ac4f4f8fb8f607ca7a792fa83491866b9d8264bf2b8d0610f43fb080a898b9c66cef688f8535c20a6cd6d14d9d9f8be4740204c28976e450ec392d43938def8aad7740b1a2f4224397781eaeea23e85b8e790533356f6057d48abd17f9f1d8c11185c82da7d71b30ba2ef9144f5b57d9cd4fb48303529cab53187f325ffe6343388afb1c40ec798daf304793dd843a62f86dcf088b3e577c26af652e596011438616709933c09e9a585ff2f9a6f9429d6e478d054a64a79473e0b2294acd8b58be59a3e1956edab302afcf348062dca3ce9b50c35463422b82d482232edf90f5ff9e067610a6258e49bbaccd73289afd804871a7cdc20a84dc2e9da032b0"
+	}
+	"apptickets"
+	{
+		"7"		"3200000004000000a699d5320100100107000000968bd8dd3d01a8c0000000002031ae6aa0e0c96a010000000000000000000d5e00e66e347a8b5fcc71ebec7e17ca2b765335d81c32c68ecf55ca955aa9ecda785a617a59bd7114864f04977ed190cb8ea575ac933b28e2ab4f5ad875976eb6497fdc1019406821536dc0bf454a5492890a3c9a36679f2117868e824b7750378608ca0401c6d0bb1b84e675342492d654ac5c7af38d7b4d05ec88b5fede5b"
+		"730"		"5600000004000000a699d53201001001da020000968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100c40a02000600e40200000000b48809000000b58809000000b6880900000028c92200000029c92200000000001510813d0e6f717c05405bcb8ecc524723baaf1130efb5a6e2dbef367b0a63a882b26b8f0a780f4977270d6b1f12cc1e4edeb68b787040c95ac12b27d7299a30ed35d70c6d2ffb926db2d7c39e5d091a82c35c66d3791a09f99890a66608c2baabae88622575d664581f39c5a4d1bc0e517632d69b547994d8b74a6f061d320b"
+		"2279720"		"3200000004000000a699d5320100100128c92200968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100c40a0200000000007b323b058d66201db9ef93e958a331433793c9ee4d6eac1c5993df23f4f39e85e48feb04204906cd7fb01d6af9161409ddc1e55a868f884093c64edf1712ad9960d3a0ab6dddd681fce8a44b6205c3acf11322630345b8428e527bef617ed4a1796bfde884771e6e28b5da788264400639950a8547e1ba744177e7fb94831b93"
+		"2279721"		"3200000004000000a699d5320100100129c92200968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100c40a020000000000789ba354df5a798b7b5ddfa3bb2467f69f0c5492941b26dfaa88896f8c4954331b049a7fd43ff62544f85b5b2458fea9487c92bf1003fe8c1e2ad2d38738f1f24a51e18cef264c3eb5084867d93fee07201bee53fbd70567b2a0c09c78d97ac1d9ee9b69d3fe65bc3f371933507a7d1b48afce806323d71657ae12f2077ef4b9"
+		"228980"		"3200000004000000a699d53201001001747e0300968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100000000000000000030f811aad33f6c3a037152c97fb6c4098da712a442d9f6afe1609246b652ba4c17d84ad14165d49515d0267a2119d98127d28f8d8b9fa10601929778e7d4e53d30e4d62287ea560fcc64ba7273f15cfce475344180ddbf142f2b726b86abf7026332f4fddb461e4d2d7044c79dc51095106ba3b2182eed6080faf5d5eec71199"
+		"431960"		"3800000004000000a699d5320100100158970600968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100b75e0100010016511b0000000000d2f736e1ba8ae107157c6d2f97ed7b4a89578b812d7fab9b890e56af3d65e43f8706012455582cf66c0faa9a1970ccd1daa5d8389030873b25f9307c2a9e985d9aaa200e57d2e816d80c47160da3fc9ab45ac76b9ab5cba790099a0c440fe69d37202c38ce46b71b58fda5d78ac969d8dac537ff08c2bb04284e3a6c2f3af11d"
+		"1790230"		"3200000004000000a699d5320100100116511b00968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100b75e01000000000017be6665d578f1f629ae23de863758e9f0895b05119503aab6f2f0b17a351838940510a62bb7a2b1217b1adc5208df48f2406d37f48e53cc68595c7ea3735f1d18a08797ccd7e5f8673887c243969165127991f919824f2c27c1a7f83e59f06254d91aeb7f5dd87fd25b1349448196916b3f0e6c5373f0843818b705069e0447"
+		"578080"		"3800000004000000a699d5320100100120d20800968bd8dd3d01a8c0000000002131ae6aa1e0c96a0100844002000100da191b0000000000b66d76c6a8b5656c797b3faaec83eddf7378edb83d624f1148a10f3bda5e68bbdc82c062e63ac4fbd617cce018e20a10c9e81909e48779d6ea723cbc54b14d9243ed5c275fa5e64f922f9a5589eed994f5c58f6779d238461599ee52edd9b8f9400a3c4795bc8fe6cc43790cb8288cf0106a369e226a9e1b36c212d182bdfb13"
+		"1776090"		"3200000004000000a699d53201001001da191b00968bd8dd3d01a8c0000000002131ae6aa1e0c96a010084400200000000000e589b848345d9e7e42580f977c4bb54296cfca34fa7301dc65cbb6c5a641b591657b287bdedff68fe6e7007adfa37be2a89811e567aef655686eefff676f7d907bc50040c476b9a72977acb62027760aa9d5d5e39b92f626085743a625e2b4146bc8634cf710a7438332f23824c967e3e4bf2d8c10f975805a62e43ea084e1b"
+	}
+	"FavoriteServersLastUpdateTime"		"1789800737"
+	"Offline"
+	{
+		"Ticket"		"08a6b3d69603152231ae6a"
+		"Signature"		"939b23e9c110fe5f6102431c4738986d8f5522b8767ce1ab9ed87cfdb8c077eac4bacb478108f07fb335c1ff7f4970f984765e5e459f264f00654d00352a5e2537b94c69f8cf8bdbd2dfdc12657b2b8bae7e8b77e0d47e65b6a5f806f5652b92c99e0351c1917f6fda230afc8470822e62fbb6ff89302b62feb78f3806beaf8c1d89d15e896339254a1ea0ce3b7ad86dfbb0e6861465e41a792cd743524ee03dc5651acbf4e16c0cea194c48384558a4f02007bcd470c5d1145581d4a348f32128892c90025d2ffaef8eb047c3c845febaf126082a2bf73d4e0c7fbb5617f5440f493f3731f7fd346a0dc77676023287a571e3f39670edb4fb1f36de7c790a3e"
+		"EncryptedTicket"		"0a206bd1689288380a0744e33c3c30f42d7280ce215e3bf6d5ff6941604952f62f5a128002939b23e9c110fe5f6102431c4738986d8f5522b8767ce1ab9ed87cfdb8c077eac4bacb478108f07fb335c1ff7f4970f984765e5e459f264f00654d00352a5e2537b94c69f8cf8bdbd2dfdc12657b2b8bae7e8b77e0d47e65b6a5f806f5652b92c99e0351c1917f6fda230afc8470822e62fbb6ff89302b62feb78f3806beaf8c1d89d15e896339254a1ea0ce3b7ad86dfbb0e6861465e41a792cd743524ee03dc5651acbf4e16c0cea194c48384558a4f02007bcd470c5d1145581d4a348f32128892c90025d2ffaef8eb047c3c845febaf126082a2bf73d4e0c7fbb5617f5440f493f3731f7fd346a0dc77676023287a571e3f39670edb4fb1f36de7c790a3e180622081003402cc03cd05228043208b25a6ecca137b7d6"
+		"EncryptedSignature"		"939b23e9c110fe5f6102431c4738986d8f5522b8767ce1ab9ed87cfdb8c077eac4bacb478108f07fb335c1ff7f4970f984765e5e459f264f00654d00352a5e2537b94c69f8cf8bdbd2dfdc12657b2b8bae7e8b77e0d47e65b6a5f806f5652b92c99e0351c1917f6fda230afc8470822e62fbb6ff89302b62feb78f3806beaf8c1d89d15e896339254a1ea0ce3b7ad86dfbb0e6861465e41a792cd743524ee03dc5651acbf4e16c0cea194c48384558a4f02007bcd470c5d1145581d4a348f32128892c90025d2ffaef8eb047c3c845febaf126082a2bf73d4e0c7fbb5617f5440f493f3731f7fd346a0dc77676023287a571e3f39670edb4fb1f36de7c790a3e"
+	}
+	"AppInfoChangeNumber"		"39015736"
+	"news"
+	{
+		"NotifyAvailableGames"		"0"
+	}
+}
