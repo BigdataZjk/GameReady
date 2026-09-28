@@ -41,7 +41,7 @@ body.preview .window{
 .win-btn{ width:34px; height:28px; border:none; border-radius:6px; cursor:pointer; background:transparent; color:var(--txt3); font-size:12px; }
 #btnMin{ font-size:0; }   /* 走查：U+2500 字形垂直偏上，改伪元素画线居中 */
 #btnMin::after{ content:""; display:block; width:10px; height:1px; background:currentColor; margin:0 auto; }
-.win-btn:hover{ background:#182130; color:var(--txt); }
+/* 最小化/关闭：纯功能按钮，无 :hover 反馈（2026-09-29 用户定稿） */
 /* 自定义 tooltip：替代系统白色 title 气泡（深色主题样式） */
 [data-tip]{ position:relative; }
 [data-tip]:hover::after{
@@ -55,7 +55,6 @@ body.preview .window{
 [data-tip][data-tip-pos="b"]:hover::after{
   left:50%; top:calc(100% + 8px); transform:translateX(-50%);
 }
-.win-btn.close:hover{ background:#e81123; color:#fff; }
 /* ---- 主体 ---- */
 .main{ flex:1; display:flex; min-height:0; }
 .rail{
@@ -187,11 +186,6 @@ body.preview .window{
 /* Steam 页定稿紧凑布局：按钮区自然高度不留白，多余空间全部交给账号面板；
    账号卡弹性拉伸（54~68px）填充面板高度，消除大片空白（用户红框标注） */
 #page-steam .power-zone{ flex:none; gap:14px; }
-#page-steam.form-open .power-zone{ gap:10px; }
-#page-steam.form-open .pbtn-steam{ width:112px; height:112px; }
-#page-steam.form-open .pbtn-steam svg{ width:38px; height:38px; }
-#page-steam.form-open .pbtn-steam .t{ font-size:11px; }
-#page-steam.form-open .cover-toggle{ padding:8px 11px; }
 /* Steam 面板内账号卡：随面板高度弹性拉伸 */
 #page-steam .ap-list .acct{ flex:1 1 54px; min-height:54px; max-height:68px; }
 .pbtn-steam.done svg{ stroke:var(--ok); filter:drop-shadow(0 0 12px rgba(61,220,132,.8)); }
@@ -219,9 +213,7 @@ body.preview .window{
 }
 .ct-info{ flex:1; min-width:0; }
 .ct-name{ font-size:12.5px; font-weight:600; }
-.ct-desc{ font-size:10.5px; color:var(--txt3); margin-top:2px; line-height:1.5; }
-.ct-desc b{ color:var(--txt2); font-weight:600; }
-.toggle{
+.ct-desc{ display:none; }   /* 2026-09-29 精简：全局覆盖开关备注已删 */.toggle{
   flex:none; width:40px; height:22px; border-radius:99px; cursor:pointer; position:relative;
   background:#1a2334; border:1px solid #2a3550; transition:.2s;
 }
@@ -254,7 +246,7 @@ body.preview .window{
 .btn.danger{ background:linear-gradient(135deg,#7a1030,#4d0a1e); border-color:#a03050; color:#ffd9e0; }
 .btn.danger:hover{ box-shadow:0 0 14px rgba(255,93,108,.35); }
 /* 禁用态（回归走查：请求中按钮须有视觉反馈且不可再点） */
-.btn:disabled, .op-btn:disabled, .browse-btn:disabled, .add-btn:disabled{
+.btn:disabled, .op-btn:disabled, .browse-btn:disabled{
   opacity:.55; cursor:default; pointer-events:none;
 }
 /* ---- 模态（账号管理） ---- */
@@ -280,8 +272,12 @@ body.preview .window{
 .op-btn.go{ color:#b9d5ff; border-color:#2c5aa0; background:linear-gradient(135deg,#123363,#0d2447); }
 .op-btn.go:hover{ box-shadow:0 0 10px rgba(90,162,255,.35); }
 .op-btn.del:hover{ color:var(--err); border-color:color-mix(in srgb,var(--err) 45%,transparent); }
-.add-form{ max-height:0; overflow:hidden; transition:max-height .35s ease, opacity .3s, padding .3s; opacity:0; background:var(--panel2); border:1px solid transparent; border-radius:10px; }
-.add-form.open{ max-height:200px; opacity:1; border-color:#2c5aa0; padding:12px; box-shadow:0 0 18px rgba(90,162,255,.12); }   /* 走查：180→200 防表单按钮过渡期被裁 */
+/* 新增登录一行（外显常驻，账号列表上方，2026-09-29 改版）；输入框风格与路径表单 .f-row input 一致 */
+.add-row{ flex:none; display:flex; gap:7px; }
+.add-row input{ flex:1; min-width:0; height:32px; border-radius:7px; border:1px solid var(--line); background:#0a0f18; color:var(--txt); padding:0 10px; font-size:12px; outline:none; font-family:"Cascadia Mono","Consolas",monospace; transition:border-color .15s, box-shadow .15s; }
+.add-row input:focus{ border-color:var(--steam); box-shadow:0 0 0 2px rgba(90,162,255,.15); }
+.add-row input::placeholder{ color:var(--txt3); }
+.add-row .btn{ height:32px; padding:0 14px; }   /* 与输入框同高对齐 */
 .f-row{ display:flex; flex-direction:column; gap:5px; margin-bottom:9px; }
 .f-row label{ font-size:10.5px; color:var(--txt3); letter-spacing:.08em; }
 .f-row input{ height:32px; border-radius:7px; border:1px solid var(--line); background:#0a0f18; color:var(--txt); padding:0 10px; font-size:12px; outline:none; font-family:"Cascadia Mono","Consolas",monospace; }
@@ -291,8 +287,6 @@ body.preview .window{
 .browse-btn{ flex:none; height:32px; padding:0 12px; cursor:pointer; border-radius:6px; font-size:11px; border:1px solid var(--line); background:var(--panel2); color:var(--txt2); font-family:inherit; transition:.15s; }   /* 走查：字号/圆角并入紧凑级规范 */
 .browse-btn:hover{ color:var(--txt); border-color:#2c3a50; }
 .f-actions{ display:flex; gap:8px; justify-content:flex-end; }
-.add-btn{ margin-top:2px; width:100%; cursor:pointer; height:38px; border-radius:10px; border:1px dashed #2c3a50; background:transparent; color:var(--txt2); font-size:12.5px; font-family:inherit; display:flex; align-items:center; justify-content:center; gap:6px; transition:.15s; }
-.add-btn:hover{ border-color:var(--steam); color:var(--steam); background:rgba(90,162,255,.05); }
 /* ---- 设置页 ---- */
 .set-list{ display:flex; flex-direction:column; gap:14px; }
 .group{ background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
@@ -366,15 +360,18 @@ body.preview .window{
 /* 非 Tauri 环境（浏览器直接打开）顶部提示横幅 */
 .no-tauri{ display:none; flex:none; padding:7px 12px; font-size:11px; text-align:center; letter-spacing:.05em;
   color:var(--warn); background:rgba(255,181,71,.09); border-bottom:1px solid color-mix(in srgb,var(--warn) 35%,transparent); }
-/* 轻量 toast：右上角滑入，2.5s 后消失 */
-.toast-box{ position:absolute; bottom:14px; right:12px; z-index:120; display:flex; flex-direction:column; gap:8px; align-items:flex-end; pointer-events:none; }   /* 走查：右下角常驻，不再遮挡模态标题/关闭钮 */
-.toast{ max-width:300px; padding:9px 14px; font-size:11px; line-height:1.5; color:var(--txt); word-break:break-all;
-  background:#101a29f2; border:1px solid #2c3a50; border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.55);
-  animation:toast-in .25s ease; transition:opacity .3s, transform .3s; }
-.toast.ok{ border-color:color-mix(in srgb,var(--ok) 45%,transparent); }
-.toast.err{ border-color:color-mix(in srgb,var(--err) 45%,transparent); color:#ffc3c9; }
-.toast.out{ opacity:0; transform:translateX(16px); }
-@keyframes toast-in{ from{ opacity:0; transform:translateX(16px); } }
+/* ---------- 底部播报栏（2026-09-29 定稿：替代右下角浮动 toast） ----------
+   单行小字、永不换行；文字超宽时从右向左循环滚动（公告播报）；布局内占位不遮挡任何 UI */
+.ticker{ flex:none; height:26px; display:flex; align-items:center; gap:8px; padding:0 12px;
+  border-top:1px solid var(--line); background:var(--panel2); pointer-events:none; }
+.ticker .tk-dot{ flex:none; width:6px; height:6px; border-radius:50%; background:var(--txt3); transform:translateY(-1px); }   /* 走查：对齐文字视觉中心（圆点按行盒几何居中会偏低 1-2px） */
+.ticker.ok .tk-dot{ background:var(--ok); }
+.ticker.err .tk-dot{ background:var(--err); }
+.ticker .tk-clip{ flex:1; min-width:0; height:100%; overflow:hidden; display:flex; align-items:center; }
+.ticker .tk-txt{ display:inline-block; white-space:nowrap; font-size:10.5px; line-height:1; color:var(--txt2); }
+.ticker.err .tk-txt{ color:#ffc3c9; }
+.ticker .tk-txt.scroll{ animation:tk-scroll linear infinite; }
+@keyframes tk-scroll{ from{ transform:translateX(var(--tk-from,100%)); } to{ transform:translateX(-100%); } }
 /* 路径模态输入框校验失败标红 */
 .f-input-row input.err{ border-color:var(--err); box-shadow:0 0 0 2px rgba(255,93,108,.14); }
 /* 日志空态 / 截断提示 */
@@ -390,7 +387,8 @@ body.preview .window{
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
     <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.0</span>
-    <div class="win-btns"><button class="win-btn" id="btnMin" data-tip="最小化" data-tip-pos="b">─</button><button class="win-btn close" id="btnClose" data-tip="关闭" data-tip-pos="b">✕</button></div>
+    <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
+    <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
   <div class="main">
     <!-- 左列导航：顶部游戏 icon（带 R1 活跃点，事件驱动），底部工具 -->
@@ -453,7 +451,6 @@ body.preview .window{
           <div class="cover-toggle">
             <div class="ct-info">
               <div class="ct-name">全局配置覆盖</div>
-              <div class="ct-desc" id="ctDesc">已关闭 · 仅覆盖当前账号配置（Steam 未运行时无法覆盖）</div>
             </div>
             <div class="toggle blue" id="globalToggle"></div>
           </div>
@@ -462,16 +459,13 @@ body.preview .window{
              「当前登录」标记仅当 Steam 进程活跃 且 登录态为该账号 时显示 -->
         <div class="acct-panel">
           <div class="ap-head"><span class="ap-title">STEAM 账号</span><span class="cnt" id="acctCnt">—</span></div>
-          <div class="ap-list" id="acctCards"></div>
-          <div class="add-form" id="addForm">
-            <div class="f-row"><label>账号</label><input type="text" placeholder="Steam 账号名 / 邮箱" id="fUser"></div>
-            <div class="f-row"><label>密码</label><input type="text" placeholder="Steam 密码" id="fPass"></div>
-            <div class="f-actions">
-              <button class="btn" id="cancelAdd">取消</button>
-              <button class="btn primary" id="doLogin">登 录</button>
-            </div>
+          <!-- 新增登录（外显一行，位于账号列表上方，2026-09-29 用户定稿）：账号 + 密码 + 登录 -->
+          <div class="add-row">
+            <input type="text" id="fUser" placeholder="账号" autocomplete="off" spellcheck="false">
+            <input type="password" id="fPass" placeholder="密码" autocomplete="new-password">
+            <button class="btn primary" type="button" id="doLogin">登 录</button>
           </div>
-          <button class="add-btn" id="addBtn">＋ 新增登录</button>
+          <div class="ap-list" id="acctCards"></div>
         </div>
       </section>
       <!-- ================ 设置 ================ -->
@@ -489,7 +483,7 @@ body.preview .window{
               <div class="toggle" id="tgStartMin" style="pointer-events:none"></div>
             </div>
             <div class="row">
-              <div class="info"><div class="name">点击关闭按钮时</div><div class="desc">关闭窗口后的行为</div></div>
+              <div class="info"><div class="name">点击关闭按钮时</div></div>
               <div class="seg" id="segClose">
                 <button type="button" data-v="tray">最小化到托盘</button>
                 <button type="button" data-v="exit">退出程序</button>
@@ -570,13 +564,13 @@ body.preview .window{
       <div class="modal-body">
         <div class="f-row"><label>英雄联盟（Game\CONFIG + LeagueClient\Config）</label>
           <div class="f-input-row">
-            <input type="text" id="mLolPath" placeholder="例如 D:\WeGameApps\英雄联盟">
+            <input type="text" id="mLolPath" placeholder="D:\WeGameApps\英雄联盟">
             <button type="button" class="browse-btn" onclick="browse('mLolPath')">浏览…</button>
           </div>
         </div>
         <div class="f-row"><label>Steam（配置覆盖 + 账号切换）</label>
           <div class="f-input-row">
-            <input type="text" id="mSteamPath" placeholder="例如 C:\Program Files (x86)\Steam">
+            <input type="text" id="mSteamPath" placeholder="C:\Program Files (x86)\Steam">
             <button type="button" class="browse-btn" onclick="browse('mSteamPath')">浏览…</button>
           </div>
         </div>
@@ -605,8 +599,8 @@ body.preview .window{
       </div>
     </div>
   </div>
-  <!-- 轻量 toast 容器（右下角） -->
-  <div class="toast-box" id="toastBox"></div>
+  <!-- 底部播报栏（单行不换行，超宽从右向左滚动；替代原右下角浮动 toast） -->
+  <div class="ticker" id="ticker"><span class="tk-dot"></span><div class="tk-clip"><span class="tk-txt" id="tkTxt">GameReady 就绪</span></div></div>
 </div>
 <script>
 /* ================= GameReady 前端逻辑（接入 Tauri 2 真实后端） =================
@@ -649,19 +643,31 @@ function el(tag, cls, text){ const n=document.createElement(tag); if(cls) n.clas
 const firstChar = s => { const t=String(s||'').trim(); return t?Array.from(t)[0]:'?'; };
 const displayName = a => a.persona_name ? (a.persona_name+'('+a.account_name+')') : (a.account_name||'');
 
-/* ---------- 轻量 toast（右下角，单条替换式：新提示替换旧提示，2.6s 消失） ----------
-   用户 2026-09-20：登录/切换是持续过程——过程提示常驻，结果提示替换过程提示，不再堆叠多条 */
-let toastTimer = null;
+/* ---------- 底部播报栏（2026-09-29 定稿：替代右下角浮动 toast） ----------
+   单条替换式：新提示替换旧提示并常驻到下一条；sticky 参数保留兼容（语义不变：
+   过程提示会被结果提示替换）。单行不换行，文字超宽时从右向左循环滚动（~42px/s）。 */
+let toastTimer = null;   // 兼容保留（旧 toast 计时器引用清理）
 function toast(msg, type, sticky){
-  const box = $('toastBox'); if(!box) return;
+  const bar = $('ticker'); if(!bar) return;
   clearTimeout(toastTimer);
-  box.textContent = '';
-  const t = el('div', 'toast'+(type?' '+type:''), msg);
-  box.appendChild(t);
-  if(!sticky){   // sticky=过程提示：常驻直到被结果提示替换
-    toastTimer = setTimeout(()=>{ t.classList.add('out'); setTimeout(()=>t.remove(), 320); }, 2600);
-  }
+  bar.className = 'ticker' + (type ? ' ' + type : '');
+  const txt = $('tkTxt');
+  txt.textContent = msg;
+  txt.classList.remove('scroll');
+  requestAnimationFrame(()=>{   // 等文本上屏后测量，超宽才滚动
+    const clip = txt.parentElement;
+    if(txt.scrollWidth - clip.clientWidth > 4){
+      txt.style.setProperty('--tk-from', clip.clientWidth + 'px');
+      txt.style.animationDuration = ((clip.clientWidth + txt.scrollWidth) / 42).toFixed(2) + 's';
+      txt.classList.add('scroll');
+    }
+  });
 }
+/* 窗口尺寸变化后重算滚动（播报文字不变，仅重新测量宽度） */
+window.addEventListener('resize', ()=>{
+  const t = $('tkTxt'), bar = $('ticker'); if(!t || !t.textContent) return;
+  toast(t.textContent, bar.classList.contains('ok') ? 'ok' : bar.classList.contains('err') ? 'err' : null);
+});
 
 /* ---------- 全局状态 ---------- */
 const state = {
@@ -733,11 +739,6 @@ function applyAccent(hex){
   document.documentElement.style.setProperty('--acc', hex);
   document.documentElement.style.setProperty('--acc-rgb', r+','+g+','+b);
 }
-function updateCtDesc(){
-  $('ctDesc').innerHTML = state.globalOn
-    ? '已开启 · 下次一键覆盖将 <b>全局配置 + 当前账号配置</b> 一起覆盖'
-    : '已关闭 · 仅覆盖当前账号配置（未登录 Steam 时无法覆盖）';
-}
 function applySettings(s){
   if(!s) return;
   state.settings = s;
@@ -748,7 +749,6 @@ function applySettings(s){
   document.querySelectorAll('#swatches .sw').forEach(w=>w.classList.toggle('on', (w.dataset.c||'').toLowerCase()===(s.accent||'').toLowerCase()));
   if(typeof s.global_cover_on === 'boolean') state.globalOn = s.global_cover_on;
   $('globalToggle').classList.toggle('on', state.globalOn);
-  updateCtDesc();
 }
 
 /* ---------- LOL 守护大按钮：invoke('start') / invoke('stop') ---------- */
@@ -822,7 +822,7 @@ coverBtn.addEventListener('click', async ()=>{
   if(!state.currentSid64){   // R2：Steam 未运行/未登录不可覆盖——无进度环，按钮灰一下表示无效点击
     coverBtn.classList.remove('invalid'); void coverBtn.offsetWidth;   // 重触发动画
     coverBtn.classList.add('invalid');
-    toast('Steam 未运行或未登录，请先打开 Steam 并登录账号', 'err');
+    toast('Steam 未运行或未登录', 'err');
     return;
   }
   coverBusy = true;
@@ -850,12 +850,10 @@ coverBtn.addEventListener('click', async ()=>{
 /* R2 全局配置覆盖小开关（写入 Settings.global_cover_on，防抖保存） */
 $('globalToggle').addEventListener('click', function(){
   state.globalOn = this.classList.toggle('on');
-  updateCtDesc();
   if(state.settings){ state.settings.global_cover_on = state.globalOn; queueSaveSettings(); }
 });
 
 /* ---------- Steam 账号面板（重构：内嵌大按钮下方；R6 完全清理 / R7 昵称(账号名)） ---------- */
-const addForm=$('addForm'), addBtn=$('addBtn');
 let acctBusy=false, acctStale=false, switchBusy=false, loginBusy=false;
 /* "当前登录账号"判定（用户语义 2026-09-20）：仅当 Steam 进程活跃 且 登录态为该账号。
    历史登录过/AutoLogin 记录都不算——Steam 没开就没有"当前登录" */
@@ -973,30 +971,19 @@ document.getElementById('cfYes').addEventListener('click', ()=>cfClose(true));
 document.getElementById('cfNo').addEventListener('click', ()=>cfClose(false));
 document.getElementById('cfClose').addEventListener('click', ()=>cfClose(false));
 document.getElementById('cfMask').addEventListener('click', e=>{ if(e.target.id==='cfMask') cfClose(false); });
-/* 新增登录：展开/收起 + login_new */
-addBtn.addEventListener('click', ()=>{
-  const open = addForm.classList.toggle('open');
-  addBtn.textContent = open ? '收起新增面板' : '＋ 新增登录';
-  document.getElementById('page-steam').classList.toggle('form-open', open);   // 大按钮等比例缩小让位
-  if(open){
-    $('fUser').focus();
-    // 走查：账号多时表单在模态底部视野外，展开动画结束后滚到表单
-    setTimeout(()=>addForm.scrollIntoView({behavior:'smooth', block:'nearest'}), 360);
-  }
-});
-$('cancelAdd').addEventListener('click', ()=>{ addForm.classList.remove('open'); addBtn.textContent='＋ 新增登录'; });
+/* 新增登录（外显一行）：login_new；点击登录先剔除账号/密码首尾空格并回填输入框 */
 $('doLogin').addEventListener('click', async ()=>{
-  const u = $('fUser').value.trim(), p = $('fPass').value;
-  if(!u || !p){ toast('请输入账号和密码', 'err'); return; }
+  const u = $('fUser').value.trim(), p = $('fPass').value.trim();
+  $('fUser').value = u; $('fPass').value = p;   // 剔除结果即刻可见
+  if(!u || !p){ toast('请输入账号和密码', 'err'); (!u ? $('fUser') : $('fPass')).focus(); return; }
   if(loginBusy || !hasTauri){ if(!hasTauri) toast(NO_TAURI_MSG, 'err'); return; }
   loginBusy = true;
   const btn = $('doLogin'); btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span> 登录中…';
-  toast('正在登录 '+u+'…（如需验证码请在 Steam 窗口完成，登录后将自动覆盖配置）', null, true);
+  toast('正在登录 '+u+'…', null, true);
   try{
     const name = await invoke('login_new', { account: u, password: p });   // 后端轮询 ≤180s（等 SteamGuard）
     toast('已登录 '+(name || u), 'ok');
     $('fUser').value=''; $('fPass').value='';
-    addForm.classList.remove('open'); addBtn.textContent='＋ 新增登录';
     refreshAccounts();
     if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});   // 回归走查：刷新 currentSid64，否则覆盖仍被拦"未登录"
   }catch(e){ toast('登录失败：'+errText(e), 'err'); }
@@ -1236,7 +1223,7 @@ $('btnClose').addEventListener('click', async ()=>{
 });
 
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
-$('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待（更新通道建设中）'));
+$('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
   let v = '0.1.0';
   try{
