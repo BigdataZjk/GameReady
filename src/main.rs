@@ -105,12 +105,10 @@ fn main() {
 // 便携原则：数据一律存 exe 同级 Data\（settings.json 等），用 current_exe 定位，
 // 不依赖工作目录。设置读写在低频场景（命令触发），原子写保证文件完整性，
 // 并发读到旧值无害，故不额外加锁。
-// PROTOCOL-NOTE（3 条，详见各处行内注释）：
+// PROTOCOL-NOTE（2 条，详见各处行内注释）：
 // 1. AppStatus.lol_guard_on 无来源：合同未给 guard 模块定义查询函数，本模块维护
-// 全局开关 set_guard_running()，guard 模块 start/stop 时需调用，否则该字段恒 false。
-// 2. 带参数的 command 使用 rename_all="snake_case"：前端按合同 Rust 签名同名传键
-// （invoke('set_paths', { lol_root, steam_root })）；Tauri 2 默认却是 camelCase。
-// 3. detect_default_roots 返回元组顺序未在合同写明，按参数命名惯例定为 (LOL, Steam)。
+// 全局开关 set_guard_running()，guard start/stop 时需调用，否则该字段恒 false。
+// 2. detect_default_roots 返回元组顺序未在合同写明，按参数命名惯例定为 (LOL, Steam)。
 // ==================== 共享类型（其他模块 use *） ====================
 
 /// 应用总状态（get_status 返回；字段保持 snake_case，前端直接用同名 key）
@@ -316,27 +314,10 @@ fn sid3_to_id64(sid3: &str) -> Option<String> {
 }
 
 // ==================== Tauri commands ====================
+// 各 command 的实现统一在文件尾 mod commands（generate_handler 路径引用需要独立 mod）。
 // PROTOCOL-NOTE: 带参数的 command 使用 rename_all="snake_case"，前端按合同 Rust 签名
 // 同名传键：invoke('set_paths', { lol_root, steam_root })。Tauri 2 默认规则是 camelCase
-// （lolRoot/steamRoot），两者不兼容；若前端统一用 camelCase，去掉 rename_all 即可，
-// 请主协调者对全工程命令（含 cover 模块 include_global）统一约定。
-
-/// 组装应用总状态（前端启动初始化 / 各操作后刷新）
-/// 用户语义（2026-09-20 修正）："当前登录账号"= **Steam 正在运行**且 AutoLoginUser
-/// 指向的账号在 loginusers.vdf 有记录——Steam 没开就视为未登录（历史账号不算）
-
-/// 设置游戏根目录：任一路径有效即保存（传空串表示保留原值），返回最新状态；
-/// 两个路径均无效时 Err，由前端标红提示。
-/// 参数键用 Tauri 默认 camelCase（lolRoot/steamRoot），与前端及全工程约定一致
-
-/// 读取设置
-
-/// 保存设置。⚠ 游戏路径字段不信任前端回传值——强制以磁盘现值覆盖
-/// （根治竞态：set_paths 刚保存的新路径被启动时的旧 settings 快照经防抖回存回滚）；
-/// 同时把"开机自启动"同步到系统（tauri-plugin-autostart 写注册表/启动项）。
-
-/// 资源管理器打开 Data 目录（explorer 正常退出码为 1，故只判 spawn 不判退出状态）
-
+// （lolRoot/steamRoot），两者不兼容；若前端统一用 camelCase，去掉 rename_all 即可。
 
 // ============================ logger ============================
 // logger.rs —— 覆盖日志模块（R12）
@@ -686,10 +667,10 @@ unsafe fn set_create_time(path: &Path, unix_secs: i64) -> Result<(), String> {
 
 // ============================ cover ============================
 // cover.rs —— Steam 一键覆盖（大按钮，R17 全链路自动化）。
-// 顺序：读设置拿 steam_root → 取当前账号 SteamID3（无则报错）→
-// 【自动】Steam 运行中则 taskkill + 等完全退出（超时 Err）→ 写账号组 →
-// （可选）写全局组 → 写日志（注明自动退出/重启）→ 若曾退出则自动重启 Steam →
-// 推 "cover-done" 事件。async + spawn_blocking：杀/等进程可阻塞 ~10s，不能冻结 UI。
+// 顺序：steam_root → 当前账号 SteamID3 + 账号名（杀 Steam 前锁定，②b）→
+// 优雅退出等完全退出（超时 Err）→ 写账号组（可选全局组）→ 日志 →
+// 凭据直登重启（2026-09-28）→ 推 "cover-done"。
+// async + spawn_blocking：杀/等进程可阻塞 ~10s+，不能冻结 UI。
 /// 一键覆盖结果报告（推给前端的 "cover-done" payload）
 #[derive(Serialize, Clone)]
 pub struct CoverReport {
@@ -725,11 +706,40 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
     let sid3 = current_account_sid3()
         .ok_or_else(|| "未检测到已登录的 Steam 账号，无法覆盖账号配置".to_string())?;
 
-    // ③ R17 自动化：Steam 运行中 → 自动 taskkill + 轮询 ≤10s 等完全退出
-    //（vdf 若在 Steam 运行时写入，会被其退出时的内存回写覆盖）
-    let was_running = kill_steam_if_running();
-    if was_running && !wait_steam_exit(10) {
-        return Err("Steam 未能在 10 秒内完全退出，请手动退出后重试".to_string());
+    // ②b 提前（杀 Steam 前）锁定「当前账号名」，供 ③ 补写与 ⑥ 凭据直登使用。
+    // 退出后再读注册表不可靠：Steam 退出/重启过程会临时清空 AutoLoginUser
+    //（2026-09-28 实测：读到空值 → 重启退化无参 → 停在「谁要玩游戏」页）。
+    // 首选注册表（与 ② 同刻），空则用 ② 的 sid3 反查 vdf AccountName 兜底。
+    let current_account: String = registry_autologin_user()
+        .or_else(|| {
+            let sid64 = sid3_to_id64(&sid3)?;
+            accounts_list_v()
+                .into_iter()
+                .find(|a| a.steam_id64 == sid64)
+                .map(|a| a.account_name)
+        })
+        .unwrap_or_default();
+
+    // ③ R17 自动化：Steam 运行中 → 自动退出 + 等完全退出再写文件
+    //（vdf 若在 Steam 运行时写入，会被其退出时的内存回写覆盖）。
+    // 2026-09-28 改优雅退出：强杀破坏 Steam 会话收尾（2026-09-20 诊断），下次
+    // 启动更易停在登录页；graceful -shutdown → 8s 未退再 taskkill 兜底
+    let was_running = is_steam_running();
+    if was_running {
+        kill_and_wait()?;
+        if !current_account.is_empty() {
+            // Steam 优雅退出会以内存态回写 loginusers.vdf，把运行中改的 RememberPassword=1
+            // 打回 0；退出后按 ②b 锁定的账号补写一次（免密仍以 accounts.json 为准）
+            if let Some(acc) = accounts_list_v()
+                .into_iter()
+                .find(|a| a.account_name.eq_ignore_ascii_case(&current_account))
+            {
+                set_remember_password(&steam_root, &acc.steam_id64, "1");
+            }
+            // Steam 退出可能已清掉 AutoLoginUser，补写回去（Steam 账号选择页预选、
+            // 下次 cover 的 ② 都依赖它）
+            let _ = registry_set_autologin_user(&current_account);
+        }
     }
 
     // ④ 先账号组，再（可选）全局组
@@ -774,10 +784,38 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
     };
     log("steam", &title, &detail, failed.is_empty());
 
-    // ⑥ 覆盖后自动重启 Steam（仅当覆盖前确实退出了它；失败不影响覆盖结果，仅记日志）
+    // ⑥ 覆盖后自动重启（仅当覆盖前确实退出了它；失败不影响覆盖结果，仅记日志）。
+    // 2026-09-28：凭据直登重启（账号名用 ②b 锁定值，不信退出后的注册表），
+    // 直登后轮询 ≤15s 确认登录完成，只留日志不影响结果。
     if was_running {
-        if let Err(e) = launch_steam(&steam_root, &[]) {
-            log("steam", "自动重启 Steam 失败", &e, false);
+        let cred_login = !current_account.is_empty() && get_cred(&current_account).is_some();
+        relaunch_with_cred(&steam_root, &current_account);
+        if cred_login {
+            // 基准：重启前该账号的 vdf Timestamp（Steam 未运行，值稳定）
+            let sid64 = sid3_to_id64(&sid3).unwrap_or_default();
+            let before_ts = accounts_list_v()
+                .into_iter()
+                .find(|a| a.steam_id64 == sid64)
+                .map(|a| a.timestamp)
+                .unwrap_or(0);
+            let mut confirmed = false;
+            for _ in 0..37 {
+                thread::sleep(Duration::from_millis(400));
+                if login_confirmed(&steam_root, &sid64, before_ts) {
+                    confirmed = true;
+                    break;
+                }
+            }
+            log(
+                "steam",
+                "覆盖后凭据直登重启",
+                if confirmed {
+                    "登录已确认（vdf Timestamp 已更新）"
+                } else {
+                    "已带 -login 启动，15s 内未确认登录（可能仍在登录中）"
+                },
+                true,
+            );
         }
     }
 
@@ -1065,8 +1103,8 @@ fn set_autologin(a: &mut RawAccount, val: &str) {
 }
 
 /// 设置账号块的 RememberPassword 字段（无则追加）。写回整份 vdf。
-/// 背景（2026-09-20 实测诊断）：`-login` 参数登录不保存 Steam 端免密凭据，
-/// vdf 里 RememberPassword 停留 0；置 1 保证 UI 状态正确（Steam 若有凭据即可免密）。
+/// 背景：-login 登录不保存 Steam 端免密凭据（详见下方凭据存储区），置 1 仅保登录页
+/// UI 勾选态正确。⚠ 只能在 Steam 已完全退出后调用（运行中写会被退出回写覆盖）。
 fn set_remember_password(root: &str, sid64: &str, val: &str) {
     let Ok(text) = read_vdf(root) else { return };
     let mut accounts = parse_vdf(&text);
@@ -1226,9 +1264,25 @@ pub fn launch_steam(root: &str, args: &[&str]) -> Result<(), String> {
         .map_err(|e| format!("启动 steam.exe 失败: {e}"))
 }
 
+/// 凭据直登重启（cover ⑥ 与 delete 共用）：账号名非空且 accounts.json 存有密码 →
+/// `-login 账号 密码` 启动（-login 不留 Steam 端免密凭据，见凭据存储区说明，故每次
+/// 重启都优先直登）；否则无参启动（老账号走 Steam 自动登录）。失败仅记日志。
+fn relaunch_with_cred(root: &str, account: &str) {
+    let pass = if account.is_empty() { None } else { get_cred(account) };
+    let r = match &pass {
+        Some(p) => launch_steam(root, &["-login", account, p.as_str()]),
+        None => launch_steam(root, &[]),
+    };
+    if let Err(e) = r {
+        log("steam", "自动重启 Steam 失败", &e, false);
+    }
+}
+
 // ==================== 凭据存储（2026-09-20 用户拍板：自用工具，明文存 Data\accounts.json） ====================
-// 目的：列表"登录"用 steam.exe -login 账号 密码 直登，100% 成功——
-// Steam 自带的自动登录凭据约三个月未登录即失效（会停在登录页），不可依赖。
+// 目的：列表"登录"与覆盖/删除后的重启统一走 steam.exe -login 账号 密码 直登，100% 成功。
+// 实测诊断（全文件唯一完整版，他处一句话引用）：
+// ① -login 参数登录不保存 Steam 端免密凭据，vdf 里 RememberPassword 停留 0；
+// ② Steam 自带自动登录凭据约三个月未登录即失效（会停在登录页）——皆不可依赖，直登为准。
 
 fn creds_path() -> PathBuf {
     data_dir().join("accounts.json")
@@ -1335,8 +1389,8 @@ pub fn switch(sid64: &str) -> Result<String, String> {
         }
     }
 
-    // ── 第 2 层：程序代输密码直登（用户无感兜底；诊断结论：-login 参数登录不保存
-    // Steam 端免密凭据，所以第 1 层对这类账号可能失效，本层保证 100% 登上）──
+    // ── 第 2 层：程序代输密码直登（-login 不留免密凭据 → 第 1 层对这类账号可能
+    // 失效，本层用户无感兜底，保证 100% 登上）──
     if let Some(pass) = get_cred(&account_name) {
         kill_and_wait()?;
         launch_steam(&root, &["-login", account_name.as_str(), pass.as_str()])?;
@@ -1364,15 +1418,16 @@ fn login_confirmed(root: &str, sid64: &str, before_ts: i64) -> bool {
     false
 }
 
-/// 删除账号（R18 全链路自动化）：Steam 运行中 → 自动 taskkill + 等完全退出（≤10s，超时 Err）
-/// → loginusers.vdf 移除该块 → 删 userdata\<sid3> 整目录（不存在则忽略）
-/// → 删除前 Steam 在运行则自动重启 → Ok(显示名)。
-/// 注：若被删账号恰为注册表当前 AutoLoginUser，不清理注册表键（Steam 重启后自行处理登录态）。
+/// 删除账号（R18 全链路自动化）：Steam 运行中 → 强杀 + 等完全退出（≤10s，超时 Err；
+/// 删除场景刻意强杀——优雅退出会回写内存态把被删的 vdf 块复活）→ loginusers.vdf 移除该块
+/// → 删 userdata\<sid3> 整目录 + 保存的凭据 → 删除前在运行则凭据直登重启（2026-09-28：
+/// 被删的正是当前账号时无参启动回选择页属预期；否则直登恢复原会话）→ Ok(显示名)。
 pub fn delete(sid64: &str) -> Result<String, String> {
     let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/switch/login_new 互斥
     let root = steam_root_or_err()?;
-    // R18 自动化：Steam 运行中不再拒绝，自动退出（vdf 运行中改会被退出时回写复活；
-    // 删当前账号时其 userdata 文件也被占用），删完自动重启
+    // 杀 Steam 前锁定当前账号名（Steam 退出过程会临时清掉注册表 AutoLoginUser），
+    // 重启用它凭据直登恢复会话；被删的若是它则凭据已删，自然退化为无参启动
+    let autologin_before = registry_autologin_user().unwrap_or_default();
     let was_running = kill_steam_if_running();
     if was_running && !wait_steam_exit(10) {
         return Err("Steam 未能在 10 秒内完全退出，请手动退出后再删除账号".to_string());
@@ -1396,87 +1451,68 @@ pub fn delete(sid64: &str) -> Result<String, String> {
         let ud = Path::new(&root).join("userdata").join(&sid3);
         let _ = fs::remove_dir_all(ud);
     }
-    // 删除前 Steam 在运行 → 自动重启（删除当前登录账号时，Steam 会回到登录界面，属预期）
+    // 删除前 Steam 在运行 → 自动重启：被删的正是当前账号则无参启动（回选择页属预期），
+    // 否则凭据直登恢复原会话
     if was_running {
-        let _ = launch_steam(&root, &[]);
+        let target = if account_name.eq_ignore_ascii_case(&autologin_before) {
+            ""
+        } else {
+            autologin_before.as_str()
+        };
+        relaunch_with_cred(&root, target);
     }
     Ok(display_name(&persona_name, &account_name))
 }
 
-// PROTOCOL-NOTE: 合同中 pub fn login_new(&str,&str) 与 #[tauri::command] pub fn login_new(String,String,AppHandle)
-// 同名同模块无法共存（Rust 限制），核心实现命名为 login_new_impl，command 保持合同名 login_new 供 main.rs 注册，行为一致。
-/// 新增登录（核心实现）：杀 Steam → 注册表 AutoLoginUser=account → steam.exe -login account password
-/// （密码仅存在于进程参数，绝不落盘/写日志）→ 轮询 ≤30s 等 loginusers.vdf 出现该 AccountName → Ok(显示名)
-pub fn login_new_impl(account: &str, password: &str) -> Result<String, String> {
+// PROTOCOL-NOTE: 合同 pub fn login_new(&str,&str) 与 #[tauri::command] 同名无法共存
+// （Rust 限制），核心实现命名 login_new_locked（要求调用方持 STEAM_OP 锁），
+// command 保持合同名 login_new 供 generate_handler 注册，行为一致。
+/// 新增登录（核心实现，**调用方必须已持有 STEAM_OP 锁**）：杀 Steam → 注册表
+/// AutoLoginUser=account → steam.exe -login account password（密码仅存在于进程参数，
+/// 不写日志）→ 凭据先落盘 → 轮询 ≤180s 等 loginusers.vdf 出现该 AccountName → Ok(显示名)。
+/// 凭据提前保存 + 180s 窗口：新账号首次登录常需 SteamGuard 邮箱验证码，超时也不丢密码，
+/// 列表「登录」永远可兜底。（Steam 运行中不写 vdf——会被退出回写覆盖；RememberPassword
+/// 由串联的 cover 在退出后补写）
+pub fn login_new_locked(account: &str, password: &str) -> Result<String, String> {
     let account = account.trim();
     if account.is_empty() {
         return Err("账号名不能为空".to_string());
     }
-    let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/switch/delete 互斥
     let root = steam_root_or_err()?;
     kill_and_wait()?;
     registry_set_autologin_user(account)?;
-    // 凭据提前保存（2026-09-20 bug 修正）：新账号首次登录常需 SteamGuard 邮箱验证码，
-    // 轮询可能超时——密码此刻就落盘（键=账号名，登录前即已知），列表"登录"永远可兜底
     save_cred_by_name(account, password);
     launch_steam(&root, &["-login", account, password])?;
-    // 确认窗口 180s（2026-09-20 bug 修正：新账号首次登录常需 SteamGuard 邮箱验证码，
-    // 30s 窗口必超时导致"看似失败"；凭据已提前保存，超时也不丢）
     for _ in 0..450 {
         thread::sleep(Duration::from_millis(400));
         if let Some(acc) = accounts_list_v()
             .into_iter()
             .find(|a| a.account_name.eq_ignore_ascii_case(account))
         {
-            // 登录成功 → vdf RememberPassword 置 1（凭据已在发起登录前保存）
-            if let Ok(root2) = steam_root_or_err() {
-                set_remember_password(&root2, &acc.steam_id64, "1");
-            }
             return Ok(display_name(&acc.persona_name, &acc.account_name));
         }
     }
     Err("登录确认超时：若 Steam 正在等待邮箱验证码，请完成验证后点列表「登录」（密码已保存，会自动直登并覆盖）".to_string())
 }
 
-// ---------------- Tauri 命令（合同签名，成功写日志 + 推 "steam-accounts-changed"） ----------------
-
-/// 账号列表（前端账号模态渲染）
-
-/// 切换账号（async + spawn_blocking：杀 Steam/轮询可阻塞 ~10s+，不能冻结 UI 线程）
-
-/// 删除账号（前端已做二次确认；可能整目录删除，同样走后台线程）
-
-/// 新增登录（密码参数绝不写入日志/文件；轮询最长 ~40s，必须走后台线程）。
-/// 2026-09-20 用户确认：登录成功后**串联自动覆盖**——新增账号"登录+配置"一步到位
-/// （此时 Steam 刚登录完成正在运行，覆盖走 R17 链路：杀→覆盖→重启）
+// ---------------- Tauri 命令：统一在文件尾 mod commands（成功写日志 + 推 "steam-accounts-changed"） ----------------
 
 
 // ============================ guide ============================
-// guide 模块：WebView2 运行时检测 + 原生引导小窗（自动/手动安装）。
-// 启动流程（见 docs/PROTOCOL.md 与设计规范）：
-// - `has_webview2()`：每次启动直接查注册表（不缓存），4 处 EdgeUpdate Clients 键任一有
-// `pv` 值即视为已安装，另有 `%ProgramFiles(x86)%\Microsoft\EdgeWebView\Application\`
-// 文件夹存在性兜底；
-// - `run_guide_window()`：阻塞运行 eframe 原生小窗（约 420×260，深色底，中文文案），
-// 直到 WebView2 就绪后返回（同进程进 tauri，无需重启 exe）。
-// 两种安装模式（全部阻塞操作都在后台线程，UI 线程只读共享状态）：
-// - 自动（推荐）：IsWow64Process2 判真实架构 → reqwest 流式下载对应离线包到 %TEMP%
-// （Content-Length 算真实百分比）→ ShellExecute "runas" 以 /silent /install 静默安装
-// （启动前 UI 预告会弹一次 UAC）→ 等待安装器进程退出 → 复查注册表 pv 出现即成功；
-// - 手动：打开微软官方 fwlink 下载页 → 后台每 1s 轮询注册表，查到即成功。
-// 下载失败时 UI 提供 [重试] 与 [改用手动下载]；安装未完成时点窗口 X 会先二次确认，
-// 确认退出则 `std::process::exit(0)`（没有 WebView2 程序无法继续）。
-// PROTOCOL-NOTE: 设计文档（GameConfigGuard/design/新产品-WebView2引导设计.md）在本机
-// 不存在，实现依据为 PROTOCOL.md 合同 + 定稿要点（fwlink 直链表 / 检测 4 处注册表 +
-// 文件夹兜底 / IsWow64Process2 映射 0xAA64→arm64、332→x86、其余→x64 / 自动模式两阶段
-// 进度 / 手动模式 1s 轮询）。注册表第 4 处采用 HKCU\Software\WOW6432Node（PROTOCOL 正文
-// 只列出 3 处，多查一处无副作用）。
-// PROTOCOL-NOTE: windows crate 0.58 中 `IsWow64Process2`（需 Win32_System_SystemInformation）、
-// `ShellExecuteExW`/`SHELLEXECUTEINFOW`（需 Win32_System_Registry）、`ShellExecuteW`
-// （需 Win32_UI_WindowsAndMessaging）都被 cfg 在工程 Cargo.toml 未启用的 feature 下，
-// 而 Cargo.toml 属共享文件禁改 —— 故本模块对这几个 API 手写等价 FFI 声明（kernel32/
-// shell32 均为系统库，链接无风险）；IsWow64Process2 通过 GetProcAddress 动态解析，
-// Win10 1511 之前的系统自动退化为环境变量判定，避免进程启动即失败。
+// guide 模块：WebView2 运行时检测 + 原生引导小窗，装好前不创建任何 WebView。
+// - has_webview2()：每次直查 4 处 EdgeUpdate Clients 键的 pv（不缓存，<1ms），另有
+//   %ProgramFiles(x86)%\Microsoft\EdgeWebView\Application 文件夹兜底；
+// - run_guide_window()：eframe 原生小窗阻塞到 WebView2 就绪（同进程进 tauri）；
+//   用户放弃安装则退出进程（没有 WebView2 程序无法继续）。
+// - 自动（推荐）：IsWow64Process2 判真实架构 → reqwest 流式下载 fwlink 离线包到
+//   %TEMP%（真实百分比）→ ShellExecute "runas" /silent /install（UI 预告将弹一次
+//   UAC）→ 等安装器退出 → 复查 pv（≤30s 轮询）。
+// - 手动：开浏览器官方下载页 + 每 1s 轮询注册表，装好自动继续。
+// PROTOCOL-NOTE: 设计文档不在本机，实现依据 PROTOCOL.md 合同 + 定稿要点（fwlink 直链
+// 见 offline_url/MANUAL_URL；IsWow64Process2 映射 0xAA64→arm64、332→x86、其余→x64）。
+// PROTOCOL-NOTE: windows crate 0.58 的 IsWow64Process2 / ShellExecuteExW 所需 feature
+// 未启用且 Cargo.toml 禁改 → 手写等价 FFI（下方 mod ffi，kernel32/shell32 系统库）；
+// IsWow64Process2 经 GetProcAddress 动态解析，Win10 1511 前退化为环境变量判定。
 // ---------------------------------------------------------------------------
 // 常量
 // ---------------------------------------------------------------------------
@@ -2374,12 +2410,14 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
 }
 
 
+/// 账号列表（前端账号模态渲染）
 #[tauri::command]
 pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
     Ok(accounts_list_v())
 }
 
 
+/// 切换账号（杀 Steam/轮询可阻塞 ~30s+，async + spawn_blocking 不冻结 UI）
 #[tauri::command]
 pub async fn switch_account(sid64: String, app: AppHandle) -> Result<String, String> {
     let name = tauri::async_runtime::spawn_blocking(move || switch(&sid64))
@@ -2391,6 +2429,7 @@ pub async fn switch_account(sid64: String, app: AppHandle) -> Result<String, Str
 }
 
 
+/// 删除账号（前端已做二次确认；整目录删除走后台线程）
 #[tauri::command]
 pub async fn delete_account(sid64: String, app: AppHandle) -> Result<String, String> {
     let name = tauri::async_runtime::spawn_blocking(move || delete(&sid64))
@@ -2402,13 +2441,18 @@ pub async fn delete_account(sid64: String, app: AppHandle) -> Result<String, Str
 }
 
 
+/// 新增登录 + 串联自动覆盖（2026-09-20 用户确认：登录+配置一步到位）。
+/// 密码不写日志；登录轮询最长 ~180s（等 SteamGuard），必须走后台线程。
 #[tauri::command]
 pub async fn login_new(account: String, password: String, app: AppHandle) -> Result<String, String> {
     let app2 = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let name = login_new_impl(&account, &password)?;   // 内部已持有 STEAM_OP 锁
+        // 全程持锁且登录→覆盖之间不释放（2026-09-28 修复：此前覆盖阶段实际无锁，
+        // 窗口期与 switch/delete/steam_cover 并发会互踩杀启 Steam 与 vdf 写入）
+        let _steam_op = STEAM_OP.lock().unwrap();
+        let name = login_new_locked(&account, &password)?;
         let include_global = load_settings().global_cover_on;
-        let note = match cover_locked(include_global, app2) {   // 锁内复用，不重入
+        let note = match cover_locked(include_global, app2) {
             Ok(rep) => format!("，已自动覆盖配置（{}/{} 成功）", rep.ok, rep.total),
             Err(e) => format!("；自动覆盖未完成：{e}"),
         };
