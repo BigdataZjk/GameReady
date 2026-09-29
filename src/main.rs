@@ -791,31 +791,37 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
         let cred_login = !current_account.is_empty() && get_cred(&current_account).is_some();
         relaunch_with_cred(&steam_root, &current_account);
         if cred_login {
-            // 基准：重启前该账号的 vdf Timestamp（Steam 未运行，值稳定）
+            // 确认轮询放后台线程（2026-09-29 提速）：文件早已写完、Steam 已重启，
+            // 报告立即返回不被 ≤15s 确认拖住，结论只进日志
+            let root2 = steam_root.clone();
             let sid64 = sid3_to_id64(&sid3).unwrap_or_default();
-            let before_ts = accounts_list_v()
-                .into_iter()
-                .find(|a| a.steam_id64 == sid64)
-                .map(|a| a.timestamp)
-                .unwrap_or(0);
-            let mut confirmed = false;
-            for _ in 0..37 {
-                thread::sleep(Duration::from_millis(400));
-                if login_confirmed(&steam_root, &sid64, before_ts) {
-                    confirmed = true;
-                    break;
-                }
-            }
-            log(
-                "steam",
-                "覆盖后凭据直登重启",
-                if confirmed {
-                    "登录已确认（vdf Timestamp 已更新）"
-                } else {
-                    "已带 -login 启动，15s 内未确认登录（可能仍在登录中）"
-                },
-                true,
-            );
+            let _ = thread::Builder::new()
+                .name("cover-login-confirm".to_string())
+                .spawn(move || {
+                    let before_ts = accounts_list_v()
+                        .into_iter()
+                        .find(|a| a.steam_id64 == sid64)
+                        .map(|a| a.timestamp)
+                        .unwrap_or(0);
+                    let mut confirmed = false;
+                    for _ in 0..75 {
+                        thread::sleep(Duration::from_millis(200));
+                        if login_confirmed(&root2, &sid64, before_ts) {
+                            confirmed = true;
+                            break;
+                        }
+                    }
+                    log(
+                        "steam",
+                        "覆盖后凭据直登重启",
+                        if confirmed {
+                            "登录已确认（vdf Timestamp 已更新）"
+                        } else {
+                            "已带 -login 启动，15s 内未确认登录（可能仍在登录中）"
+                        },
+                        true,
+                    );
+                });
         }
     }
 
@@ -1352,6 +1358,16 @@ pub fn current_account_sid3() -> Option<String> {
 pub fn switch(sid64: &str) -> Result<String, String> {
     let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/delete/login_new 互斥
     let root = steam_root_or_err()?;
+    // ── 提速（2026-09-29）：目标就是当前运行中且已登录的账号 → 免杀免启直接返回
+    //（手滑重选自己不再白付一轮 Steam 退出+重启+登录）──
+    if is_steam_running() {
+        let cur_sid3 = current_account_sid3().unwrap_or_default();
+        if !cur_sid3.is_empty() && sid3_to_id64(&cur_sid3).as_deref() == Some(sid64) {
+            if let Some(acc) = accounts_list_v().into_iter().find(|a| a.steam_id64 == sid64) {
+                return Ok(display_name(&acc.persona_name, &acc.account_name));
+            }
+        }
+    }
     kill_and_wait()?;
     let mut accounts = parse_vdf(&read_vdf(&root)?);
     let idx = accounts
@@ -1377,25 +1393,14 @@ pub fn switch(sid64: &str) -> Result<String, String> {
         .unwrap_or(0);
     let display = display_name(&persona_name, &account_name);
 
-    // ── 第 1 层：历史登录态直登（用户语义：免密优先）──
-    // 无参启动 = Steam 自动登录该账号（与客户端下拉选历史账号同一机制，凭据有效则直接进入）。
-    // 窗口 20s（2026-09-20 修正：Steam 冷启动/慢网络下载登录页可 >8s，过短会把
-    // "载入中"误判为失败，实际稍后自动登录成功——用户实测反馈）
-    launch_steam(&root, &[])?;
-    for _ in 0..50 {
-        thread::sleep(Duration::from_millis(400));
-        if login_confirmed(&root, sid64, before_ts) {
-            return Ok(display);
-        }
-    }
-
-    // ── 第 2 层：程序代输密码直登（-login 不留免密凭据 → 第 1 层对这类账号可能
-    // 失效，本层用户无感兜底，保证 100% 登上）──
+    // ── 第 1 层（2026-09-29 调序）：有保存凭据 → 直接凭据直登。-login 立即自动
+    // 提交，不再先无参启动等 Steam 慢速自动登录（实测会在密码页停留 ~10s 才续上
+    // 缓存会话）。20s 未确认（Steam 更新/慢网络）不重试不报错——凭据已提交，
+    // Steam 会自行完成，强杀重启反而打断
     if let Some(pass) = get_cred(&account_name) {
-        kill_and_wait()?;
         launch_steam(&root, &["-login", account_name.as_str(), pass.as_str()])?;
-        for _ in 0..25 {
-            thread::sleep(Duration::from_millis(400));
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(200));
             if login_confirmed(&root, sid64, before_ts) {
                 return Ok(display);
             }
@@ -1403,7 +1408,18 @@ pub fn switch(sid64: &str) -> Result<String, String> {
         return Ok(display);
     }
 
-    // ── 第 3 层：无凭据 → 明确要求补输一次密码（仅从未保存过密码的账号出现）──
+    // ── 第 2 层：无凭据 → 无参启动走 Steam 自带自动登录（与客户端下拉选历史账号
+    // 同一机制，凭据时效内有效）。窗口 20s：Steam 冷启动/慢网络可 >8s，过短会把
+    // "载入中"误判为失败（2026-09-20 用户实测反馈）──
+    launch_steam(&root, &[])?;
+    for _ in 0..100 {
+        thread::sleep(Duration::from_millis(200));
+        if login_confirmed(&root, sid64, before_ts) {
+            return Ok(display);
+        }
+    }
+
+    // ── 第 3 层：自动登录也未成（从未保存过密码/Steam 凭据过期）→ 明确要求补输一次 ──
     Err(format!("{display}：需在 Steam 输一次密码"))
 }
 
@@ -1483,8 +1499,8 @@ pub fn login_new_locked(account: &str, password: &str) -> Result<String, String>
     registry_set_autologin_user(account)?;
     save_cred_by_name(account, password);
     launch_steam(&root, &["-login", account, password])?;
-    for _ in 0..450 {
-        thread::sleep(Duration::from_millis(400));
+    for _ in 0..900 {
+        thread::sleep(Duration::from_millis(200));
         if let Some(acc) = accounts_list_v()
             .into_iter()
             .find(|a| a.account_name.eq_ignore_ascii_case(account))
@@ -1492,7 +1508,9 @@ pub fn login_new_locked(account: &str, password: &str) -> Result<String, String>
             return Ok(display_name(&acc.persona_name, &acc.account_name));
         }
     }
-    Err("登录确认超时：若 Steam 正在等待邮箱验证码，请完成验证后点列表「登录」（密码已保存，会自动直登并覆盖）".to_string())
+    // 2026-09-29 文案修正：超时≠失败——Steam 可能正在自更新/等待验证码/慢网络，
+    // 不预设单一原因；后台看护（见 login_new command）会在晚到成功时自动补覆盖
+    Err("登录确认超时：Steam 可能正在更新或等待验证码，完成后会自动进入并补覆盖配置；若长时间停在登录页，点列表「登录」自动重试（密码已保存）".to_string())
 }
 
 // ---------------- Tauri 命令：统一在文件尾 mod commands（成功写日志 + 推 "steam-accounts-changed"） ----------------
@@ -2450,7 +2468,45 @@ pub async fn login_new(account: String, password: String, app: AppHandle) -> Res
         // 全程持锁且登录→覆盖之间不释放（2026-09-28 修复：此前覆盖阶段实际无锁，
         // 窗口期与 switch/delete/steam_cover 并发会互踩杀启 Steam 与 vdf 写入）
         let _steam_op = STEAM_OP.lock().unwrap();
-        let name = login_new_locked(&account, &password)?;
+        let name = match login_new_locked(&account, &password) {
+            Ok(n) => n,
+            Err(e) => {
+                // 2026-09-29 晚到确认看护：超时≠失败（Steam 可能正在自更新/慢网络）。
+                // 后台最长 10 分钟盯 loginusers.vdf，确认登录成功后自动补跑串联覆盖，
+                // 与即时成功路径等效；期间用户手动重试也不冲突（STEAM_OP 串行）。
+                if e.contains("登录确认超时") {
+                    let acct = account.clone();
+                    let app3 = app2.clone();
+                    let _ = thread::Builder::new()
+                        .name("login-late-confirm".to_string())
+                        .spawn(move || {
+                            for _ in 0..300 {
+                                thread::sleep(Duration::from_secs(2));
+                                let Some(acc) = accounts_list_v()
+                                    .into_iter()
+                                    .find(|a| a.account_name.eq_ignore_ascii_case(&acct))
+                                else {
+                                    continue;
+                                };
+                                let display = display_name(&acc.persona_name, &acc.account_name);
+                                let include_global = load_settings().global_cover_on;
+                                let _steam_op = STEAM_OP.lock().unwrap();   // 与常规 Steam 操作串行
+                                let note = match cover_locked(include_global, app3.clone()) {
+                                    Ok(rep) => {
+                                        format!("，已自动补覆盖配置（{}/{} 成功）", rep.ok, rep.total)
+                                    }
+                                    Err(err) => format!("，补覆盖未完成：{err}"),
+                                };
+                                log("acct", "晚到登录确认", &format!("{display} 已登录（登录耗时较长）{note}"), true);
+                                let _ = app3.emit("steam-accounts-changed", ());
+                                return;
+                            }
+                            log("acct", "晚到登录确认", "10 分钟内仍未检测到该账号登录成功，如需重试请点列表「登录」（密码已保存）", false);
+                        });
+                }
+                return Err(e);
+            }
+        };
         let include_global = load_settings().global_cover_on;
         let note = match cover_locked(include_global, app2) {
             Ok(rep) => format!("，已自动覆盖配置（{}/{} 成功）", rep.ok, rep.total),

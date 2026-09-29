@@ -83,6 +83,20 @@ body.preview .window{
 .rail .tool.active{ color:var(--acc); border-color:color-mix(in srgb,var(--acc) 40%,transparent); box-shadow:0 0 12px rgba(var(--acc-rgb),.18); }
 .rail .tool.active::before{ content:""; position:absolute; left:-14px; top:50%; transform:translateY(-50%); width:3px; height:20px; border-radius:3px; background:var(--acc); box-shadow:0 0 8px var(--acc); }
 .rail .tool svg{ width:17px; height:17px; }
+/* ---- 左侧导航长按拖拽排序（2026-09-29，手机式交互） ---- */
+.rail{ user-select:none; -webkit-user-select:none; }
+.rail .game, .rail .tool{ touch-action:none; }
+.rail .drag-ghost{
+  position:fixed; left:0; top:0; z-index:999; pointer-events:none; cursor:grabbing;
+  filter:drop-shadow(0 10px 22px rgba(0,0,0,.65)); border-color:#2c3a50;
+  transition:none;   /* ghost 必须瞬时跟手：压掉 .game/.tool 的 .2s 过渡 */
+}
+/* 占位槽：被拖图标的目标落点（其他图标围绕它腾位，松手图标落入槽内） */
+.rail .drag-slot{ flex:none; border:1px dashed #2c3a50; background:rgba(90,162,255,.05);
+  animation:slot-breathe 1.6s ease-in-out infinite; }
+@keyframes slot-breathe{ 0%,100%{ opacity:.65; } 50%{ opacity:1; } }
+body.rail-dragging{ cursor:grabbing; }
+body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹 tooltip */
 /* R1 进程活跃状态点：绿点外圈脉冲=运行中，灰=未运行（由后端 game-active 事件驱动，非点击演示）。
    回归走查：原左上角(top/left:-3px)脉冲光环被窗口边缘裁成不对称，改挂右上角（右侧有内容区空间） */
 .live-dot{
@@ -364,11 +378,13 @@ body.preview .window{
    单行小字、永不换行；文字超宽时从右向左循环滚动（公告播报）；布局内占位不遮挡任何 UI */
 .ticker{ flex:none; height:26px; display:flex; align-items:center; gap:8px; padding:0 12px;
   border-top:1px solid var(--line); background:var(--panel2); pointer-events:none; }
-.ticker .tk-dot{ flex:none; width:6px; height:6px; border-radius:50%; background:var(--txt3); transform:translateY(-1px); }   /* 走查：对齐文字视觉中心（圆点按行盒几何居中会偏低 1-2px） */
+.ticker .tk-dot{ flex:none; width:6px; height:6px; border-radius:50%; background:var(--txt3); transform:translateY(-1px); transition:opacity .6s; }   /* 走查：对齐文字视觉中心（圆点按行盒几何居中会偏低 1-2px） */
 .ticker.ok .tk-dot{ background:var(--ok); }
 .ticker.err .tk-dot{ background:var(--err); }
+.ticker.fade .tk-dot{ opacity:0; }   /* 普通消息 5s 后渐隐（2026-09-29），长驻只留给过程消息 */
 .ticker .tk-clip{ flex:1; min-width:0; height:100%; overflow:hidden; display:flex; align-items:center; }
-.ticker .tk-txt{ display:inline-block; white-space:nowrap; font-size:10.5px; line-height:1; color:var(--txt2); }
+.ticker .tk-txt{ display:inline-block; white-space:nowrap; font-size:10.5px; line-height:1; color:var(--txt2); transition:opacity .6s; }
+.ticker.fade .tk-txt{ opacity:0; }
 .ticker.err .tk-txt{ color:#ffc3c9; }
 .ticker .tk-txt.scroll{ animation:tk-scroll linear infinite; }
 @keyframes tk-scroll{ from{ transform:translateX(var(--tk-from,100%)); } to{ transform:translateX(-100%); } }
@@ -401,7 +417,7 @@ body.preview .window{
         <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="11.5" fill="none" stroke="#5aa2ff" stroke-width="1.8"/><circle cx="10" cy="15" r="3.2" fill="none" stroke="#5aa2ff" stroke-width="1.6"/><path d="M12 12 18 7.5" stroke="#5aa2ff" stroke-width="1.6" stroke-linecap="round"/><circle cx="18" cy="7.5" r="2" fill="#5aa2ff"/></svg>
         <span class="live-dot off" id="steamDot"></span>
       </div>
-      <div class="spacer"></div>
+      <div class="spacer" id="railSpacer"></div>
       <div class="tool" id="nav-logs" data-tip="覆盖日志" onclick="location.hash='logs'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
       <div class="tool" id="nav-settings" data-tip="设置" onclick="location.hash='settings'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg></div>
       <div class="tool" id="nav-about" data-tip="关于" onclick="location.hash='about'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r=".5" fill="currentColor"/></svg></div>
@@ -644,9 +660,9 @@ const firstChar = s => { const t=String(s||'').trim(); return t?Array.from(t)[0]
 const displayName = a => a.persona_name ? (a.persona_name+'('+a.account_name+')') : (a.account_name||'');
 
 /* ---------- 底部播报栏（2026-09-29 定稿：替代右下角浮动 toast） ----------
-   单条替换式：新提示替换旧提示并常驻到下一条；sticky 参数保留兼容（语义不变：
-   过程提示会被结果提示替换）。单行不换行，文字超宽时从右向左循环滚动（~42px/s）。 */
-let toastTimer = null;   // 兼容保留（旧 toast 计时器引用清理）
+   单条替换式：新提示替换旧提示；普通消息 5s 后渐隐，sticky（过程消息）常驻到被
+   结果替换。单行不换行，文字超宽时从右向左循环滚动（~42px/s）。 */
+let toastTimer = null;
 function toast(msg, type, sticky){
   const bar = $('ticker'); if(!bar) return;
   clearTimeout(toastTimer);
@@ -662,7 +678,13 @@ function toast(msg, type, sticky){
       txt.classList.add('scroll');
     }
   });
+  if(!sticky){ toastTimer = setTimeout(()=>bar.classList.add('fade'), 5000); }
 }
+/* 过程消息实时刷新（2026-09-29）：长操作（登录等）每 2s 追加已等待时长，
+   结束即停——过程文案永不"停在旧状态" */
+let progTimer = null, progSec = 0;
+function progStart(labelFn){ progStop(); progSec = 0; progTimer = setInterval(()=>{ progSec += 2; toast(labelFn(progSec), null, true); }, 2000); }
+function progStop(){ if(progTimer){ clearInterval(progTimer); progTimer = null; } }
 /* 窗口尺寸变化后重算滚动（播报文字不变，仅重新测量宽度） */
 window.addEventListener('resize', ()=>{
   const t = $('tkTxt'), bar = $('ticker'); if(!t || !t.textContent) return;
@@ -683,7 +705,13 @@ const NO_TAURI_MSG = '请在 GameReady 应用中运行';
 
 /* ---------- 路由（hash 跳转，进日志页时按需加载） ---------- */
 const PAGES = ['lol','steam','settings','logs','about'];
-function curPage(){ let p=(location.hash||'#lol').replace('#',''); return PAGES.includes(p)?p:'lol'; }
+/* 第一个导航 tab = 拖拽排序后的实际 DOM 顺序第一个（2026-09-29：启动页跟随排序） */
+function firstNavPage(){
+  const n = document.querySelector('.rail .game, .rail .tool');
+  if(n){ const p = (n.id || '').replace(/^nav-/, ''); if(PAGES.includes(p)) return p; }
+  return 'lol';
+}
+function curPage(){ let p=(location.hash||('#'+firstNavPage())).replace('#',''); return PAGES.includes(p)?p:firstNavPage(); }
 function render(){
   const p = curPage();
   document.querySelectorAll('.page').forEach(s=>s.classList.toggle('show', s.id==='page-'+p));
@@ -694,8 +722,118 @@ function render(){
   $('nav-about').classList.toggle('active', p==='about');
   if(p==='logs') ensureLogs();
 }
+/* ---------- 左侧导航长按拖拽排序（2026-09-29，手机式交互） ----------
+   按住 400ms 进入拖拽：ghost 跟随指针、其余图标 FLIP 动画实时腾位，可跨中部分隔线；
+   未满时长松手或先移动 >8px = 普通点击（正常导航不误伤）；顺序存 localStorage。 */
+(function(){
+  const rail = document.querySelector('.rail'); if(!rail) return;
+  const LONGPRESS_MS = 400, CANCEL_PX = 8, ORDER_KEY = 'gr_nav_order';
+  let holdTimer = null, item = null, slot = null, ghosting = false, sx = 0, sy = 0, sw = 0, sh = 0, eatClick = false;
+
+  /* 启动时恢复上次的排序（序列含分隔线占位，完整重建） */
+  try{
+    const saved = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null');
+    if(Array.isArray(saved)) saved.forEach(id => {
+      const n = document.getElementById(id);
+      if(n && n.parentElement === rail) rail.appendChild(n);
+    });
+  }catch(_){}
+
+  rail.addEventListener('dragstart', e => e.preventDefault());   // 禁原生拖拽，避免双影
+
+  rail.addEventListener('pointerdown', e => {
+    if(e.button !== 0) return;
+    const t = e.target.closest('.game,.tool');
+    if(!t || !rail.contains(t)) return;
+    e.preventDefault();                     // 防选中/原生拖拽（不影响 click 导航）
+    item = t; ghosting = false; sx = e.clientX; sy = e.clientY;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => beginGhost(e), LONGPRESS_MS);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  });
+
+  function beginGhost(e){
+    const r = item.getBoundingClientRect();
+    sw = r.width; sh = r.height;
+    ghosting = true;
+    /* 占位槽顶住原位（其他图标零跳动），随后槽跟手移动 = 明确的"让出"落点 */
+    slot = document.createElement('div');
+    slot.className = 'drag-slot';
+    slot.style.width = sw + 'px';
+    slot.style.height = sh + 'px';
+    slot.style.borderRadius = getComputedStyle(item).borderRadius;
+    rail.insertBefore(slot, item);
+    item.classList.add('drag-ghost');
+    item.style.width = sw + 'px';           // fixed 脱离 flex 流，锁原宽防塌陷
+    document.body.classList.add('rail-dragging');
+    track(e.clientX, e.clientY);
+  }
+
+  function onMove(e){
+    if(!ghosting){
+      if(Math.hypot(e.clientX - sx, e.clientY - sy) > CANCEL_PX) clearTimeout(holdTimer);   // 提前移走：取消长按，抬手即普通点击
+      return;
+    }
+    track(e.clientX, e.clientY);
+  }
+
+  function track(x, y){
+    item.style.transform = `translate(${x - sw/2}px, ${y - sh/2}px) scale(1.14)`;
+    /* 槽随中线越过的位置实时移动（分隔线参与定位但不可拖），其余图标围绕槽 FLIP 腾位 */
+    let placed = false;
+    for(const s of [...rail.children]){
+      if(s === item || s === slot) continue;
+      const r = s.getBoundingClientRect();
+      if(y < r.top + r.height/2){
+        if(s.previousElementSibling !== slot) flip(() => rail.insertBefore(slot, s));
+        placed = true; break;
+      }
+    }
+    if(!placed && rail.lastElementChild !== slot) flip(() => rail.appendChild(slot));
+  }
+
+  /* FLIP：其余图标从旧位置 transform 起步、靠各自 transition:.2s 平滑归位 */
+  function flip(mutate){
+    const kids = [...rail.children].filter(c => c !== item && (c.classList.contains('game') || c.classList.contains('tool')));
+    const before = new Map(kids.map(c => [c, c.getBoundingClientRect().top]));
+    mutate();
+    kids.forEach(c => {
+      const dy = before.get(c) - c.getBoundingClientRect().top;
+      if(Math.abs(dy) < 0.5) return;
+      c.style.transition = 'none';
+      c.style.transform = `translateY(${dy}px)`;
+      void c.offsetWidth;                   // 强制回流锁定起点
+      c.style.transition = '';
+      c.style.transform = '';
+    });
+  }
+
+  function onUp(){
+    clearTimeout(holdTimer);
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    if(!ghosting){ item = null; return; }   // 普通点击：不拦截，导航照常
+    rail.insertBefore(item, slot);          // 图标精确落入占位槽
+    slot.remove(); slot = null;
+    item.classList.remove('drag-ghost');
+    item.style.width = ''; item.style.transform = '';
+    document.body.classList.remove('rail-dragging');
+    try{ localStorage.setItem(ORDER_KEY, JSON.stringify([...rail.children].map(c => c.id).filter(Boolean))); }catch(_){}
+    eatClick = true;                        // 吞掉落点处的 click，防止拖完误跳页
+    item = null; ghosting = false;
+  }
+
+  rail.addEventListener('click', e => {
+    if(eatClick){ e.stopPropagation(); e.preventDefault(); eatClick = false; }
+  }, true);
+})();
+
 window.addEventListener('hashchange', render);
-if(!location.hash) location.hash='lol'; else render();
+location.hash = firstNavPage();   // 启动总是进第一个 tab（与拖拽后的顺序一致），忽略残留 hash
+render();
 
 /* ---------- R1 进程活跃绿点（game-active 事件驱动） ---------- */
 function setDot(dot, active){
@@ -918,10 +1056,12 @@ async function doSwitch(a){
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   switchBusy = true;
   toast('正在登录 '+displayName(a)+'…', null, true);
+  progStart(s => '正在登录 '+displayName(a)+'…（已等待 '+s+'s）');
   try{
     const name = await invoke('switch_account', { sid64: String(a.steam_id64) });
     toast('已登录 '+(name || displayName(a)), 'ok');
   }catch(e){ toast(errText(e), 'err'); }
+  finally{ progStop(); }
   switchBusy = false;
   refreshAccounts();   // 后端 steam-accounts-changed 事件也会触发一次刷新，此处幂等
   if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});   // 登录态以注册表/运行态真值刷新
@@ -980,14 +1120,15 @@ $('doLogin').addEventListener('click', async ()=>{
   loginBusy = true;
   const btn = $('doLogin'); btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span> 登录中…';
   toast('正在登录 '+u+'…', null, true);
+  progStart(s => '正在登录 '+u+'…（已等待 '+s+'s，Steam 更新/验证码会更久）');   // 实时刷新等待时长
   try{
-    const name = await invoke('login_new', { account: u, password: p });   // 后端轮询 ≤180s（等 SteamGuard）
+    const name = await invoke('login_new', { account: u, password: p });   // 后端轮询 ≤180s（等 SteamGuard/更新）
     toast('已登录 '+(name || u), 'ok');
     $('fUser').value=''; $('fPass').value='';
     refreshAccounts();
     if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});   // 回归走查：刷新 currentSid64，否则覆盖仍被拦"未登录"
-  }catch(e){ toast('登录失败：'+errText(e), 'err'); }
-  finally{ loginBusy=false; btn.disabled=false; btn.textContent='登 录'; }
+  }catch(e){ toast(errText(e), 'err'); }   // 后端消息自含语境（超时≠失败等），不加"登录失败"前缀
+  finally{ progStop(); loginBusy=false; btn.disabled=false; btn.textContent='登 录'; }
 });
 /* 回车即提交（桌面习惯） */
 [$('fUser'),$('fPass')].forEach(i=>i.addEventListener('keydown', e=>{
