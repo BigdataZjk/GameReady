@@ -1,15 +1,7 @@
 @echo off
-rem GameReady build: outputs gameready.exe to project root
-rem Usage: build.bat          build and copy exe to root (keeps cache for fast rebuild)
-rem        build.bat clean    build, copy exe, then wipe target directory
-cd /d "%~dp0"
-echo [1/2] cargo build --release --features custom-protocol ...
-cargo build --release --locked --features custom-protocol
-if errorlevel 1 (echo BUILD FAILED & exit /b 1)
-copy /y "target\release\gameready.exe" "gameready.exe" >nul
-if errorlevel 1 (echo COPY FAILED & exit /b 1)
-for %%A in (gameready.exe) do echo [2/2] OK: %%~fA (%%~zA bytes)
-if /i "%~1"=="clean" (
-    echo cleaning target ...
-    cargo clean
-)
+setlocal
+rem One build path for local use and sanitized release packages.
+set "BUILD_CLEAN="
+if /i "%~1"=="clean" set "BUILD_CLEAN=-Clean"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\release.ps1" %BUILD_CLEAN%
+exit /b %errorlevel%

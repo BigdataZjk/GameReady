@@ -1,7 +1,6 @@
 //! Steam 凭据备份：本地持久队列、SFTP 合并、读回确认与可恢复重试。
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
@@ -209,19 +208,7 @@ fn read_store(path: &Path) -> Result<Store> {
 fn write_store(path: &Path, store: &Store) -> Result<()> {
     let text = serde_json::to_vec_pretty(store)
         .map_err(|_| error("local_error", "备份数据序列化失败", false))?;
-    let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-    let result = (|| -> std::io::Result<()> {
-        let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        f.write_all(&text)?;
-        f.sync_all()?;
-        drop(f);
-        fs::rename(&tmp, path)
-    })();
-    if let Err(e) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(local_error("保存备份数据失败", e));
-    }
-    Ok(())
+    crate::atomic_write(path, &text, true).map_err(|e| local_error("保存备份数据失败", e))
 }
 
 fn edit<T>(f: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {

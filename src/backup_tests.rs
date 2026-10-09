@@ -13,6 +13,8 @@ struct Files {
     fail_confirmation: bool,
     replaced: bool,
     posix_rename: bool,
+    removed: Vec<String>,
+    truncated: Vec<String>,
 }
 
 type Shared = Arc<Mutex<Files>>;
@@ -89,7 +91,10 @@ impl russh_sftp::server::Handler for Sftp {
         if !files.files.contains_key(&path) && !flags.contains(OpenFlags::CREATE) { return Err(StatusCode::NoSuchFile); }
         let parent = path.rsplit_once('/').unwrap().0;
         if !files.dirs.contains_key(parent) { return Err(StatusCode::NoSuchFile); }
-        if flags.contains(OpenFlags::TRUNCATE) { files.files.insert(path.clone(), Vec::new()); }
+        if flags.contains(OpenFlags::TRUNCATE) {
+            files.truncated.push(path.clone());
+            files.files.insert(path.clone(), Vec::new());
+        }
         files.files.entry(path.clone()).or_default();
         Ok(Handle { id, handle: path })
     }
@@ -130,7 +135,9 @@ impl russh_sftp::server::Handler for Sftp {
         Ok(ok(id))
     }
     async fn remove(&mut self, id: u32, path: String) -> std::result::Result<Status, Self::Error> {
-        self.files.lock().unwrap().files.remove(&path).ok_or(StatusCode::NoSuchFile)?;
+        let mut files = self.files.lock().unwrap();
+        files.removed.push(path.clone());
+        files.files.remove(&path).ok_or(StatusCode::NoSuchFile)?;
         Ok(ok(id))
     }
     async fn rename(&mut self, id: u32, from: String, to: String) -> std::result::Result<Status, Self::Error> {
@@ -182,6 +189,34 @@ async fn fixture() -> Fixture {
     });
     Fixture { config: Config { enabled: true, host: "127.0.0.1".into(), port, username: "fixture".into(),
         password: "fixture-password".into(), remote_path: "/accounts.txt".into(), fingerprint }, files, listener: task }
+}
+
+#[tokio::test]
+async fn sync_only_adds_or_updates_and_never_deletes_or_truncates_the_account_file() {
+    for posix in [false, true] {
+        let f = fixture().await;
+        {
+            let mut files = f.files.lock().unwrap();
+            files.posix_rename = posix;
+            files.files.insert("/accounts.txt".into(), b"nas_only----keep\nplayer----old\n".to_vec());
+        }
+        let remote = Remote::connect(&f.config).await.unwrap();
+        remote.probe("/accounts.txt").await.unwrap();
+        let mut store = Store::default();
+        store.enqueue("player", "updated", "手动同步");
+        store.enqueue("added", "new", "手动同步");
+        remote.commit("/accounts.txt", "device", &store.queue).await.unwrap();
+        // Local removal or an empty upload must never remove NAS-only accounts.
+        remote.commit("/accounts.txt", "device", &[]).await.unwrap();
+        {
+            let files = f.files.lock().unwrap();
+            assert_eq!(files.files["/accounts.txt"], b"added----new\nnas_only----keep\nplayer----updated\n");
+            assert!(!files.removed.iter().any(|p| p == "/accounts.txt"));
+            assert!(!files.truncated.iter().any(|p| p == "/accounts.txt"));
+            assert_eq!(files.files.len(), 1);
+        }
+        remote.close().await;
+    }
 }
 
 #[tokio::test]
