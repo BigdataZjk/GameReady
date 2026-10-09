@@ -20,13 +20,197 @@ use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tauri::{AppHandle, Emitter};
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE};
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::core::{s, w, PCWSTR};
+use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_NOCLOSEPROCESS};
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
 use windows::Win32::System::Threading::{GetCurrentProcess, WaitForSingleObject, INFINITE};
 
 mod backup;
-mod vdf;
-use vdf::Account as RawAccount;
+mod vdf {
+//! Steam VDF parsing, account records and preference merging.
+#[derive(Clone, Debug, PartialEq)]
+enum Value { Text(String), Object(Vec<(String, Value)>) }
 
+fn parse(text: &str) -> Result<Vec<(String, Value)>, String> {
+    let bytes = text.trim_start_matches('\u{feff}').as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b if b.is_ascii_whitespace() => i += 1,
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+            },
+            b'{' | b'}' => { tokens.push((bytes[i] as char).to_string()); i += 1; },
+            b'"' => {
+                i += 1; let start = i;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' { i += 1; }
+                    i += 1;
+                }
+                if i >= bytes.len() { return Err("VDF 字符串未闭合，原文件已保留".into()); }
+                tokens.push(format!("\"{}", std::str::from_utf8(&bytes[start..i]).map_err(|_| "VDF 编码错误")?));
+                i += 1;
+            },
+            _ => return Err("VDF 格式无法识别，原文件已保留".into()),
+        }
+    }
+    fn object(tokens: &[String], i: &mut usize, nested: bool, depth: usize) -> Result<Vec<(String, Value)>, String> {
+        if depth > 64 { return Err("VDF 嵌套层数过多".into()); }
+        let mut pairs = Vec::new();
+        while let Some(token) = tokens.get(*i) {
+            *i += 1;
+            if token == "}" {
+                if nested { return Ok(pairs); }
+                return Err("VDF 大括号不匹配".into());
+            }
+            let key = token.strip_prefix('"').ok_or("VDF 缺少键名")?.to_string();
+            let token = tokens.get(*i).ok_or("VDF 缺少字段值")?;
+            *i += 1;
+            let value = if token == "{" { Value::Object(object(tokens, i, true, depth + 1)?) }
+                else { Value::Text(token.strip_prefix('"').ok_or("VDF 字段值无效")?.into()) };
+            pairs.push((key, value));
+        }
+        if nested { return Err("VDF 大括号未闭合".into()); }
+        Ok(pairs)
+    }
+    object(&tokens, &mut 0, false, 0)
+}
+
+fn merge_into(target: &mut Vec<(String, Value)>, patch: &[(String, Value)]) {
+    for (key, value) in patch {
+        if let Some((_, current)) = target.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            match (current, value) {
+                (Value::Object(current), Value::Object(patch)) => merge_into(current, patch),
+                (current, value) => *current = value.clone(),
+            }
+        } else { target.push((key.clone(), value.clone())); }
+    }
+}
+
+fn render(pairs: &[(String, Value)], depth: usize, output: &mut String) {
+    let indent = "\t".repeat(depth);
+    for (key, value) in pairs {
+        match value {
+            Value::Text(value) => output.push_str(&format!("{indent}\"{key}\"\t\t\"{value}\"\n")),
+            Value::Object(children) => {
+                output.push_str(&format!("{indent}\"{key}\"\n{indent}{{\n"));
+                render(children, depth + 1, output);
+                output.push_str(&format!("{indent}}}\n"));
+            },
+        }
+    }
+}
+
+pub fn merge(existing: &[u8], template: &[u8]) -> Result<Vec<u8>, String> {
+    let mut target = parse(std::str::from_utf8(existing).map_err(|_| "现有 Steam 配置不是 UTF-8，原文件已保留")?)?;
+    let patch = parse(std::str::from_utf8(template).map_err(|_| "内置 Steam 配置编码错误")?)?;
+    if patch.len() != 1 { return Err("内置 Steam 配置根节点无效".into()); }
+    if !target.is_empty() {
+        if target.len() != 1 { return Err("现有 Steam 配置根节点无效，原文件已保留".into()); }
+        if patch[0].0 == "UserLocalConfigStore" && target[0].0 == "InstallConfigStore" {
+            // 修复旧版账号模板使用全局根名的问题，同时保留已有内容。
+            target[0].0 = patch[0].0.clone();
+        }
+        if !target[0].0.eq_ignore_ascii_case(&patch[0].0) { return Err("现有 Steam 配置类型不匹配，原文件已保留".into()); }
+    }
+    merge_into(&mut target, &patch);
+    let mut output = String::new(); render(&target, 0, &mut output);
+    Ok(output.into_bytes())
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Account {
+    pub sid64: String,
+    pub fields: Vec<(String, String)>,
+}
+
+impl Account {
+    pub fn set(&mut self, name: &str, value: &str) {
+        if let Some((_, current)) = self.fields.iter_mut().find(|(key, _)| key == name) {
+            *current = value.into();
+        } else {
+            self.fields.push((name.into(), value.into()));
+        }
+    }
+}
+
+pub fn parse_users(text: &str) -> Result<Vec<Account>, String> {
+    let tree = parse(text)?;
+    if tree.len() != 1 || !tree[0].0.eq_ignore_ascii_case("users") { return Err("loginusers.vdf 根节点无效，原文件已保留".into()); }
+    let (_, value) = tree.into_iter().next().unwrap();
+    let Value::Object(users) = value else { return Err("loginusers.vdf 账号列表格式无效".into()); };
+    users.into_iter().map(|(sid64, value)| {
+        let Value::Object(fields) = value else { return Err("loginusers.vdf 账号块格式无效".into()); };
+        if sid64.parse::<u64>().is_err() {
+            return Err("loginusers.vdf 含无法识别的账号字段，原文件已保留".into());
+        }
+        let fields = fields.into_iter().map(|(key, value)| match value {
+            Value::Text(value) => Ok((key, value)),
+            _ => Err("loginusers.vdf 含无法识别的账号字段，原文件已保留".to_string()),
+        }).collect::<Result<_, _>>()?;
+        Ok(Account { sid64, fields })
+    }).collect()
+}
+
+pub fn render_users(accounts: &[Account]) -> String {
+    let users = accounts.iter().map(|a| (a.sid64.clone(), Value::Object(a.fields.iter()
+        .map(|(key, value)| (key.clone(), Value::Text(value.clone()))).collect()))).collect();
+    let mut output = String::new();
+    render(&[("users".into(), Value::Object(users))], 0, &mut output);
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn account_records_preserve_order_escapes_and_unknown_fields() {
+        let text = "\u{feff}\"users\" { // Steam may use different whitespace\n\
+            \"76561197960265729\" { \"AccountName\" \"fixture\" \"PersonaName\" \"escaped \\\"quote\\\" 中文\" \"FutureField\" \"keep\" } \
+            \"76561197960265730\" { \"AccountName\" \"other\" \"AutoLogin\" \"1\" } }";
+        let mut accounts = parse_users(text).unwrap();
+        assert_eq!(accounts.len(), 2);
+        let original_fields = accounts[0].fields.clone();
+        accounts[0].set("AutoLogin", "1");
+        accounts[1].set("AutoLogin", "0");
+        assert_eq!(&accounts[0].fields[..3], original_fields);
+        assert_eq!(accounts[1].fields.len(), 2);
+        assert_eq!(parse_users(&render_users(&accounts)).unwrap(), accounts);
+        assert_eq!(render_users(&[]), "\"users\"\n{\n}\n");
+    }
+
+    #[test]
+    fn invalid_account_trees_are_rejected_without_partial_results() {
+        for text in ["", "\"other\" {}", "\"users\" \"invalid\"", "\"users\" { \"bad-id\" {} }",
+            "\"users\" { \"1\" \"invalid\" }", "\"users\" { \"1\" { \"nested\" {} } }",
+            "\"users\" { \"1\" {} \"2\" {", "\"users\" {} \"extra\" {}"] {
+            assert!(parse_users(text).is_err(), "Accepted invalid accounts: {text}");
+        }
+    }
+
+    #[test]
+    fn preferences_merge_without_losing_other_fields() {
+        let original = br#""UserLocalConfigStore" { "system" { "InGameOverlayShortcutKey" "OLD" "unknown" "keep" } "session" { "fixture" "unchanged" } }"#;
+        let patch = br#""UserLocalConfigStore" { "system" { "InGameOverlayShortcutKey" "KEY_NONE" } }"#;
+        let result = merge(original, patch).unwrap();
+        let text = String::from_utf8(result.clone()).unwrap();
+        assert!(text.contains("unchanged")); assert!(text.contains("keep")); assert!(!text.contains("OLD"));
+        assert_eq!(merge(&result, patch).unwrap(), result);
+    }
+    #[test]
+    fn malformed_text_is_rejected_and_escaped_text_round_trips() {
+        assert!(merge(b"broken", br#""InstallConfigStore" {}"#).is_err());
+        assert!(merge(br#""InstallConfigStore" { "x" "unfinished""#, br#""InstallConfigStore" {}"#).is_err());
+        let original = "\u{feff}\"InstallConfigStore\" { // comment\n\"name\" \"escaped \\\"quote\\\" 中文\" }";
+        let result = merge(original.as_bytes(), br#""InstallConfigStore" {}"#).unwrap();
+        assert_eq!(parse(original).unwrap(), parse(std::str::from_utf8(&result).unwrap()).unwrap());
+    }
+}
+}
+use vdf::Account as RawAccount;
 
 /// 托盘唤起主窗口
 fn show_main(app: &tauri::AppHandle) {
@@ -108,11 +292,7 @@ fn main() {
         .expect("GameReady 运行失败");
 }
 
-
-// ============================ store ============================
-// 便携原则：数据一律存 exe 同级 Data\（settings.json 等），用 current_exe 定位，
-// 不依赖工作目录。设置读写在低频场景（命令触发），原子写保证文件完整性，
-// 并发读到旧值无害，故不额外加锁。
+// 设置与数据目录
 
 /// 应用总状态（get_status 返回；字段保持 snake_case，前端直接用同名 key）
 #[derive(Serialize, Deserialize, Clone)]
@@ -196,8 +376,7 @@ fn find_entry_ci(dir: &Path, lower_name: &str) -> Option<PathBuf> {
     None
 }
 
-/// LOL 根目录有效：存在 <root>\LeagueClient\LeagueClient.exe（WeGame 国服实测结构，
-/// LeagueClient 子目录大小写不敏感定位）；兼容 <root>\LeagueClient.exe 的非标准安装
+/// 兼容 LeagueClient 子目录与客户端直接位于根目录的安装。
 fn lol_root_ok(root: &Path) -> bool {
     if let Some(lc_dir) = find_entry_ci(root, "leagueclient") {
         if find_entry_ci(&lc_dir, "leagueclient.exe").is_some() {
@@ -227,8 +406,7 @@ pub fn detect_default_roots() -> (Option<String>, Option<String>) {
     (detect_lol_root(), detect_steam_root())
 }
 
-/// LOL 探测：常见盘符下 <盘>:\WeGameApps\英雄联盟（D→C→E 优先），
-/// WeGameApps / 英雄联盟 / LeagueClient 各级目录名均大小写不敏感定位
+/// 按 D、C、E 盘顺序探测 WeGame 安装目录，忽略路径大小写。
 fn detect_lol_root() -> Option<String> {
     for drive in ["D:", "C:", "E:"] {
         let base = PathBuf::from(format!("{drive}\\"));
@@ -243,9 +421,7 @@ fn detect_lol_root() -> Option<String> {
     None
 }
 
-/// Steam 探测：优先注册表 HKLM\SOFTWARE\WOW6432Node\Valve\Steam 的 InstallPath
-/// （本机实测可靠，读到即采用）；失败回退 C:\Program Files (x86)\Steam，
-/// 回退值仅当确实存在 steam.exe 时才返回，避免给出明显无效的默认
+/// 优先注册表，回退标准目录；只有路径有效才返回。
 fn detect_steam_root() -> Option<String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     if let Ok(key) = hklm.open_subkey(r"SOFTWARE\WOW6432Node\Valve\Steam") {
@@ -282,11 +458,7 @@ pub fn load_settings() -> Settings {
     let s = Settings {
         lol_root: lol,
         steam_root: steam,
-        global_cover_on: false,
-        autostart: false,
-        start_minimized: false,
-        close_behavior: "tray".to_string(),
-        accent: "#00e5ff".to_string(),
+        ..Settings::default()
     };
     if !settings_path().exists() { let _ = save_settings(&s); }
     s
@@ -336,9 +508,7 @@ pub fn set_guard_running(on: bool) {
     GUARD_RUNNING.store(on, Ordering::Relaxed);
 }
 
-/// SteamID3 → SteamID64：id64 = sid3 + 76561197960265728（换算关系本机实测验证）
-/// current_account_sid3() 返回 sid3，此处反算 id64 供 AppStatus 使用（二选一方案之一，
-/// 未采用"再解析一次 loginusers.vdf"：避免与 steam 模块重复实现 vdf 匹配逻辑）
+/// SteamID3 转 SteamID64，溢出时返回 None。
 fn sid3_to_id64(sid3: &str) -> Option<String> {
     let n: u64 = sid3.trim().parse().ok()?;
     n.checked_add(SID64_BASE)
@@ -348,10 +518,7 @@ fn sid3_to_id64(sid3: &str) -> Option<String> {
 // ==================== Tauri commands ====================
 // 各 command 的实现统一在文件尾 mod commands（generate_handler 路径引用需要独立 mod）。
 
-// ============================ logger ============================
-// 存储：exe 同级 Data\logs.jsonl，一行一条 LogEntry 的 JSON（追加写）；
-// 超过 5000 条时整体重写、保留最新 5000（日志写入低频，全量重写可接受）。
-// 事件：每条日志追加后推 "log-appended"（payload = LogEntry，前端日志页前插展示）。
+// 日志
 /// 日志保留上限（R12：超限截断保留最新）
 const MAX_ENTRIES: usize = 5000;
 
@@ -411,17 +578,7 @@ fn append_and_truncate(entry: &LogEntry) {
 
 // 日志读取命令位于 commands 模块，按时间降序返回。
 
-
-// ============================ watcher ============================
-// 后台线程每 2s 用 sysinfo 枚举进程：
-// LOL 活跃   = 存在 LeagueClient.exe（客户端大厅）或 League of Legends.exe（对局）
-// Steam 活跃 = 存在 steam.exe
-// 与上次状态比较，变化时推事件 "game-active" payload {"lol":bool,"steam":bool}。
-// 冷启动预热：前 5 轮（0/2/4/6/8s）无论是否变化都推一次——前端页面加载与
-// listen 注册完成的时刻不确定（Tauri emit 只送达"已注册"的监听，不缓存），
-// 预热保证前端任意时刻就绪后 2s 内必能收到当前状态（满足"3s 内必推首帧"）。
-// 另：本模块的 spawn() 是 main.rs setup 中最早拿到 AppHandle 的入口，
-// 顺带为 logger 注入全局 AppHandle（log 合同签名不带 app 参数）。
+// 进程状态监听
 /// 轮询间隔（合同：2s）
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// 冷启动无条件推送的轮数（覆盖前端晚加载场景，代价仅几次幂等的重复事件）
@@ -473,12 +630,7 @@ fn scan(sys: &System) -> (bool, bool) {
     (lol, steam)
 }
 
-
-// ============================ packs ============================
-// 7 个配置文件 include_bytes! 嵌入 exe（源在仓库 packs/ 下，只读资产）；
-// write_all 按 scope 过滤后写入目标根目录，并把产物三项时间戳统一设为
-// 本地 2000-01-01 00:00:00（覆盖标识：区分 GameReady 产物与游戏回写）。
-// 目标相对路径（rel）与真实文件大小写严格一致，{SID3} 为 SteamID3 占位符。
+// 内置配置
 /// 覆盖范围（write_all 按 scope 过滤内置文件）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackScope {
@@ -498,49 +650,7 @@ pub struct PackFile {
     pub scope: PackScope,
 }
 
-/// 全部内置文件（7 个）：LOL 5 + Steam 全局 1 + Steam 账号 1
-static FILES: [PackFile; 7] = [
-    // ── LOL：Game\Config（对局内配置）──
-    PackFile {
-        bytes: include_bytes!("../packs/game.cfg"),
-        rel: r"Game\Config\game.cfg",
-        scope: PackScope::Lol,
-    },
-    PackFile {
-        bytes: include_bytes!("../packs/input.ini"),
-        rel: r"Game\Config\input.ini",
-        scope: PackScope::Lol,
-    },
-    PackFile {
-        bytes: include_bytes!("../packs/PersistedSettings.json"),
-        rel: r"Game\Config\PersistedSettings.json",
-        scope: PackScope::Lol,
-    },
-    // ── LOL：LeagueClient\Config（客户端偏好，均无账号字段）──
-    PackFile {
-        bytes: include_bytes!("../packs/LCUAccountPreferences.yaml"),
-        rel: r"LeagueClient\Config\LCUAccountPreferences.yaml",
-        scope: PackScope::Lol,
-    },
-    PackFile {
-        bytes: include_bytes!("../packs/LCULocalPreferences.yaml"),
-        rel: r"LeagueClient\Config\LCULocalPreferences.yaml",
-        scope: PackScope::Lol,
-    },
-    // ── Steam：全局配置 ──
-    PackFile {
-        bytes: include_bytes!("../packs/config.vdf"),
-        rel: r"config\config.vdf",
-        scope: PackScope::SteamGlobal,
-    },
-    // ── Steam：当前账号配置（{SID3} 占位，写盘时替换）──
-    PackFile {
-        bytes: include_bytes!("../packs/localconfig.vdf"),
-        rel: r"userdata\{SID3}\config\localconfig.vdf",
-        scope: PackScope::SteamAccount,
-    },
-];
-
+include!(concat!(env!("OUT_DIR"), "/packs.rs"));
 
 /// 单文件覆盖结果：ok=true 且 err=Some 表示写盘成功但时间戳设置失败（"ts-failed: ..."）
 #[derive(Serialize, Clone)]
@@ -550,10 +660,7 @@ pub struct CoverResult {
     pub err: Option<String>,
 }
 
-/// 把 scope 范围内的内置文件全部写入 root：
-/// - SteamAccount 范围的目标路径含 {SID3} 占位符，sid3 为 None 时跳过该文件并在 err 里注明；
-/// - 父目录不存在则递归创建；
-/// - 写成功后设置创建/修改/访问时间 = 本地 2000-01-01 00:00:00，时间戳失败不算覆盖失败。
+/// 应用指定配置组；账号组需 SID3。写入成功但时间戳失败只记警告。
 pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<CoverResult> {
     let mut out = Vec::new();
     for f in FILES.iter().filter(|f| f.scope == scope) {
@@ -683,12 +790,7 @@ unsafe fn set_create_time(path: &Path, unix_secs: i64) -> Result<(), String> {
     r
 }
 
-
-// ============================ cover ============================
-// 顺序：steam_root → 当前账号 SteamID3 + 账号名（杀 Steam 前锁定，②b）→
-// 优雅退出等完全退出（超时 Err）→ 写账号组（可选全局组）→ 日志 →
-// 凭据直登重启（2026-09-28）→ 推 "cover-done"。
-// async + spawn_blocking：杀/等进程可阻塞 ~10s+，不能冻结 UI。
+// Steam 配置应用
 /// 一键覆盖结果报告（推给前端的 "cover-done" payload）
 #[derive(Serialize, Clone)]
 pub struct CoverReport {
@@ -700,9 +802,7 @@ pub struct CoverReport {
     pub auto_restarted: bool,
 }
 
-/// Steam 一键覆盖：账号组 localconfig.vdf 必覆盖，include_global=true 再覆盖全局 config.vdf
-/// 覆盖核心（调用方必须已持有 STEAM_OP 锁）。
-/// pub(crate)：login_new 登录成功后在锁内串联调用（登录+覆盖一步到位）。
+/// 调用方持 STEAM_OP：退出 Steam、合并配置，再凭据直登恢复原账号。
 pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Result<CoverReport, String> {
     // ⓪ 用户语义（2026-09-20 修正）：覆盖只针对**正在运行且已登录**的 Steam——
     // Steam 没开就不存在"当前账号会话"，覆盖无从谈起
@@ -845,12 +945,7 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
     Ok(report)
 }
 
-
-// ============================ guard ============================
-// 对抗 PersistedSettings.json 等文件的服务端同步回写。
-// start 幂等（已在跑直接 Ok）；每 1s 推 "guard-stats"（count 语义 =
-// 累计覆盖轮次，一轮 +1）；连续 5 轮全部文件失败 → 失败日志 +
-// "guard-error" 事件 + 自停；stop 置停止位并 join 线程，返回统计并写结束日志。
+// LOL 守护
 /// 守护运行句柄（全局唯一，OnceCell 持有；None = 未在运行）
 struct GuardHandle {
     stop_flag: Arc<AtomicBool>,
@@ -971,14 +1066,7 @@ fn fmt_duration(ms: u64) -> String {
     }
 }
 
-
-// ============================ steam ============================
 // Steam 账号管理
-// 职责：loginusers.vdf 极简解析/重建（保持实测 Tab 格式，Steam 退出后才能写）、
-// 注册表 AutoLoginUser 读写、Steam 进程检测/强杀/启动、账号列表/切换/删除/新增登录。
-// 实测 loginusers.vdf 字节级格式（LF 换行、无 BOM）：
-// "users"\n{\n\t"<SteamID64>"\n\t{\n\t\t"字段"\t\t"值"\n...\t}\n}\n
-// 字段顺序：AccountName/PersonaName/RememberPassword/WantsOfflineMode/SkipOfflineModeWarning/AutoLogin/Timestamp
 /// CREATE_NO_WINDOW：taskkill / steam.exe 等子进程一律隐藏控制台窗口，避免闪黑框
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// SteamID64 → SteamID3 换算基数（实测：userdata 目录名 = SteamID64 − 76561197960265728）
@@ -1121,8 +1209,7 @@ pub fn kill_steam_if_running() -> bool {
     true
 }
 
-/// 轮询等待 Steam 完全退出（100ms 一次，上限 timeout_secs 秒）。合同 pub API（R17）。
-/// 循环内复用同一 System 实例做增量刷新（每次 System::new 全量枚举在等待期会占可观 CPU）。
+/// 复用进程快照，每 100ms 等待 Steam 退出，最多 timeout_secs 秒。
 pub fn wait_steam_exit(timeout_secs: u32) -> bool {
     use sysinfo::ProcessRefreshKind;
     let mut sys = System::new();
@@ -1138,9 +1225,7 @@ pub fn wait_steam_exit(timeout_secs: u32) -> bool {
     !alive(&sys)
 }
 
-/// 优雅退出 Steam 并等待完全退出：先官方命令 `steam.exe -shutdown`（正常退出会保存
-/// 登录会话状态），8s 未退再 taskkill /F 兜底。超时 Err。
-/// （2026-09-20 诊断：强杀会破坏 Steam 正常会话收尾，降低下次自动登录成功率）
+/// 优雅退出 Steam，8 秒未退则强杀；仍未退出时返回错误。
 fn kill_and_wait() -> Result<(), String> {
     if !is_steam_running() {
         return Ok(());
@@ -1165,8 +1250,7 @@ fn kill_and_wait() -> Result<(), String> {
     }
 }
 
-/// 启动 <steam_root>\steam.exe（CREATE_NO_WINDOW、spawn 后不 wait，不阻塞也不产生控制台窗口）。
-/// 合同 pub API（R17）：供 cover 模块复用。
+/// 后台启动 Steam，隐藏控制台，不等待进程退出。
 pub fn launch_steam(root: &str, args: &[&str]) -> Result<(), String> {
     let exe = Path::new(root).join("steam.exe");
     Command::new(&exe)
@@ -1177,9 +1261,7 @@ pub fn launch_steam(root: &str, args: &[&str]) -> Result<(), String> {
         .map_err(|e| format!("启动 steam.exe 失败: {e}"))
 }
 
-/// 凭据直登重启（cover ⑥ 与 delete 共用）：账号名非空且 accounts.json 存有密码 →
-/// `-login 账号 密码` 启动（-login 不留 Steam 端免密凭据，见凭据存储区说明，故每次
-/// 重启都优先直登）；否则无参启动（老账号走 Steam 自动登录）。失败仅记日志。
+/// 优先用保存的密码重启，缺少密码时无参启动；失败写日志。
 fn relaunch_with_cred(root: &str, account: &str) {
     let pass = if account.is_empty() { None } else { get_cred(account) };
     let r = match &pass {
@@ -1259,8 +1341,7 @@ pub fn accounts_list_v() -> Vec<SteamAccount> {
     }
 }
 
-/// 当前账号 SteamID3：注册表 AutoLoginUser(账号名) → 在 loginusers.vdf 反查其 SteamID64 → 减基数得 sid3。
-/// 任一环节失败返回 None。
+/// 从注册表当前账号反查 SteamID3，任一步失败返回 None。
 pub fn current_account_sid3() -> Option<String> {
     let name = registry_autologin_user()?;
     let acc = accounts_list_v()
@@ -1269,9 +1350,7 @@ pub fn current_account_sid3() -> Option<String> {
     sid64_to_sid3(&acc.steam_id64)
 }
 
-/// 切换账号（列表"登录"）：杀 Steam → vdf/注册表指向目标 → 启动 steam.exe →
-/// **凭据直登**（Data\accounts.json 有该账号密码 → `-login 账号 密码` 参数登录；
-/// 无凭据 → 无参启动走 Steam 自动登录，凭据时效内有效）→ 轮询该账号 Timestamp 更新确认登录完成。
+/// 串行切换账号；保存的密码优先，确认本次登录后才允许自动备份。
 pub fn switch(sid64: &str) -> Result<String, String> {
     let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/delete/login_new 互斥
     let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1335,7 +1414,13 @@ pub fn switch(sid64: &str) -> Result<String, String> {
                 return Ok(display);
             }
         }
-        watch_switch_login(root, account_name, pass, before_ts, generation);
+        watch_login(account_name, pass, before_ts, generation, "列表登录确认", |confirmed| {
+            if confirmed.is_some() {
+                log("acct", "Steam 登录确认", "登录已确认，已按备份设置处理", true);
+            } else {
+                log("acct", "Steam 登录未确认", "未获得本次登录成功记录，密码没有加入 NAS 上传队列", false);
+            }
+        });
         return Err(format!("{display}：登录尚未确认，暂不备份；完成 Steam 验证后会自动同步"));
     }
 
@@ -1378,30 +1463,27 @@ fn confirmed_account(target: &str, baseline: i64) -> Option<SteamAccount> {
     accounts_list_v().into_iter().find(|acc| login_observed(acc, running, current.as_deref(), target.trim(), baseline))
 }
 
-fn watch_switch_login(root: String, account: String, password: String, baseline: i64, generation: u64) {
-    let _ = thread::Builder::new().name("switch-late-confirm".into()).spawn(move || {
+/// Shared late-login watcher. Confirm again under STEAM_OP before backup or covering settings.
+fn watch_login(account: String, password: String, baseline: i64, generation: u64, source: &'static str,
+    on_result: impl FnOnce(Option<SteamAccount>) + Send + 'static) {
+    let _ = thread::Builder::new().name("login-late-confirm".into()).spawn(move || {
         for _ in 0..300 {
             thread::sleep(Duration::from_secs(2));
             if STEAM_GENERATION.load(Ordering::SeqCst) != generation { return; }
-            let Some(acc) = confirmed_account(&account, baseline) else { continue; };
+            if confirmed_account(&account, baseline).is_none() { continue; }
             let _steam_op = STEAM_OP.lock().unwrap();
             if STEAM_GENERATION.load(Ordering::SeqCst) != generation
-                || get_cred(&account).as_deref() != Some(password.as_str())
-                || !login_confirmed(&root, &acc.steam_id64, baseline) { return; }
-            backup::confirmed_login(&account, &password, "列表登录确认");
-            log("acct", "Steam 登录确认", "登录已确认，已按备份设置处理", true);
+                || get_cred(&account).as_deref() != Some(password.as_str()) { return; }
+            let Some(acc) = confirmed_account(&account, baseline) else { return; };
+            backup::confirmed_login(&account, &password, source);
+            on_result(Some(acc));
             return;
         }
-        if STEAM_GENERATION.load(Ordering::SeqCst) == generation {
-            log("acct", "Steam 登录未确认", "未获得本次登录成功记录，密码没有加入 NAS 上传队列", false);
-        }
+        if STEAM_GENERATION.load(Ordering::SeqCst) == generation { on_result(None); }
     });
 }
 
-/// 删除账号（R18 全链路自动化）：Steam 运行中 → 强杀 + 等完全退出（≤10s，超时 Err；
-/// 删除场景刻意强杀——优雅退出会回写内存态把被删的 vdf 块复活）→ loginusers.vdf 移除该块
-/// → 删 userdata\<sid3> 整目录 + 保存的凭据 → 删除前在运行则凭据直登重启（2026-09-28：
-/// 被删的正是当前账号时无参启动回选择页属预期；否则直登恢复原会话）→ Ok(显示名)。
+/// 只清理本机账号与 userdata；强杀避免退出回写复活账号，必要时恢复原会话。
 pub fn delete(sid64: &str) -> Result<String, String> {
     let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/switch/login_new 互斥
     STEAM_GENERATION.fetch_add(1, Ordering::SeqCst);
@@ -1454,12 +1536,7 @@ pub fn delete(sid64: &str) -> Result<String, String> {
     Ok(display_name(&persona_name, &account_name))
 }
 
-/// 新增登录（核心实现，**调用方必须已持有 STEAM_OP 锁**）：杀 Steam → 注册表
-/// AutoLoginUser=account → steam.exe -login account password（密码仅存在于进程参数，
-/// 不写日志）→ 凭据先落盘 → 轮询 ≤180s 等 loginusers.vdf 出现该 AccountName → Ok(显示名)。
-/// 凭据提前保存 + 180s 窗口：新账号首次登录常需 SteamGuard 邮箱验证码，超时也不丢密码，
-/// 列表「登录」永远可兜底。（Steam 运行中不写 vdf——会被退出回写覆盖；RememberPassword
-/// 由串联的 cover 在退出后补写）
+/// 调用方持 STEAM_OP：本地保存密码并登录，最多等 180 秒；超时后由后台继续确认。
 pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> Result<String, String> {
     let account = account.trim();
     if account.is_empty() || password.is_empty() || account.contains(['\r', '\n', '\0']) || password.contains(['\r', '\n', '\0']) {
@@ -1486,17 +1563,7 @@ pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> R
 
 // ---------------- Tauri 命令：统一在文件尾 mod commands（成功写日志 + 推 "steam-accounts-changed"） ----------------
 
-
-// ============================ guide ============================
-// guide 模块：WebView2 运行时检测 + 原生引导小窗，装好前不创建任何 WebView。
-// - has_webview2()：每次直查 4 处 EdgeUpdate Clients 键的 pv（不缓存，<1ms），另有
-//   %ProgramFiles(x86)%\Microsoft\EdgeWebView\Application 文件夹兜底；
-// - run_guide_window()：eframe 原生小窗阻塞到 WebView2 就绪（同进程进 tauri）；
-//   用户放弃安装则退出进程（没有 WebView2 程序无法继续）。
-// - 自动（推荐）：IsWow64Process2 判真实架构 → reqwest 流式下载 fwlink 离线包到
-//   %TEMP%（真实百分比）→ ShellExecute "runas" /silent /install（UI 预告将弹一次
-//   UAC）→ 等安装器退出 → 复查 pv（≤30s 轮询）。
-// - 手动：开浏览器官方下载页 + 每 1s 轮询注册表，装好自动继续。
+// WebView2 安装引导
 
 /// EdgeUpdate Clients 的 WebView2 固定 GUID 子键（检测读它的 pv 值）。
 const CLIENTS_SUBKEY: &str = concat!(
@@ -1510,15 +1577,7 @@ const MANUAL_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 /// 自动模式下载到 %TEMP% 的离线包文件名。
 const SETUP_TEMP_NAME: &str = "GameReady-WebView2Setup.exe";
 
-/// ShellExecute 的 SEE_MASK_NOCLOSEPROCESS（安装完拿 hProcess 等待退出）。
-const SEE_MASK_NOCLOSEPROCESS: u32 = 0x40;
-
-/// SW_SHOW（ShellExecuteInfoW.nShow 的显示方式）。
-const SW_SHOW: i32 = 5;
-
-/// 检测 WebView2 运行时是否已安装：4 处注册表任一有非空 pv 值即 true，
-/// 再兜底检查 `%ProgramFiles(x86)%\Microsoft\EdgeWebView\Application\` 是否存在。
-/// 每次调用直接查询、不缓存（读取 <1ms）。
+/// 检查四处注册表，回退检查 WebView2 安装目录。
 pub fn has_webview2() -> bool {
     let hklm_wow64 = format!(r"SOFTWARE\WOW6432Node\{}", CLIENTS_SUBKEY);
     let hklm_native = format!(r"SOFTWARE\{}", CLIENTS_SUBKEY);
@@ -1535,8 +1594,7 @@ pub fn has_webview2() -> bool {
         || webview_dir_exists()
 }
 
-/// 阻塞运行 WebView2 引导小窗（eframe 原生窗口），直到 WebView2 就绪后返回。
-/// 若用户放弃安装（窗口以任何方式关闭且未装好），直接退出进程。
+/// 保持原生引导窗口，安装完成后继续；放弃安装则退出。
 pub fn run_guide_window() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -1562,9 +1620,7 @@ pub fn run_guide_window() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 检测实现
-// ---------------------------------------------------------------------------
 
 /// 在指定预定义根键下查子键是否有非空 pv 值（REG_SZ 字符串）。
 fn reg_has_pv(root: &winreg::RegKey, path: &str) -> bool {
@@ -1591,87 +1647,16 @@ fn webview_dir_exists() -> bool {
     std::path::Path::new(r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application").is_dir()
 }
 
-// ---------------------------------------------------------------------------
-// Windows FFI；动态查询 API 以兼容较旧系统
-// ---------------------------------------------------------------------------
-
-mod ffi {
-    use std::ffi::c_void;
-
-    /// ShellExecuteExW 用的参数结构（C: SHELLEXECUTEINFOW，64 位自然对齐布局）。
-    /// 注意：此布局仅适用于 64 位目标（本工程发布 x64；若改编译 32 位需按 packed(1) 调整）。
-    #[repr(C)]
-    pub struct ShellExecuteInfoW {
-        pub cb_size: u32,
-        pub f_mask: u32,
-        pub hwnd: *mut c_void,
-        pub lp_verb: *const u16,      // "runas" 提权 / "open"
-        pub lp_file: *const u16,      // 目标文件或 URL
-        pub lp_parameters: *const u16,
-        pub lp_directory: *const u16,
-        pub n_show: i32,              // SW_SHOW = 5
-        pub h_inst_app: *mut c_void,  // HINSTANCE 返回值
-        pub lp_id_list: *mut c_void,
-        pub lp_class: *const u16,
-        pub hkey_class: *mut c_void,
-        pub dw_hot_key: u32,
-        pub h_icon: *mut c_void,      // C 侧是 hIcon/hMonitor 联合体，指针大小
-        pub h_process: *mut c_void,   // SEE_MASK_NOCLOSEPROCESS 时为安装器进程句柄
-    }
-
-    /// IsWow64Process2 的函数指针形态（HANDLE 借用 *mut c_void 表达）。
-    pub type IsWow64Process2Fn =
-        unsafe extern "system" fn(*mut c_void, *mut u16, *mut u16) -> i32;
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        pub fn GetModuleHandleW(lp_module_name: *const u16) -> *mut c_void;
-        pub fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
-    }
-
-    #[link(name = "shell32")]
-    extern "system" {
-        pub fn ShellExecuteExW(p_exec_info: *mut ShellExecuteInfoW) -> i32;
-    }
-}
-
-/// 字符串转 NUL 结尾的 UTF-16（宽字符），供 Win32 W 系列 API 使用。
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-// ---------------------------------------------------------------------------
-// 真实架构判定
-// ---------------------------------------------------------------------------
-
-/// 判定操作系统真实架构："x64" | "x86" | "arm64"。
-/// 首选动态解析的 IsWow64Process2（native machine：0xAA64→arm64 / 332→x86 / 其余→x64），
-/// 系统 API 不存在（Win10 1511 之前）或调用失败时退化为环境变量判定。
+/// 优先动态查询 IsWow64Process2，旧系统回退环境变量。
 fn native_arch() -> &'static str {
-    // ① IsWow64Process2（GetProcAddress 动态解析，缺失时不影响进程启动）
-    let kernel32 = wide("kernel32.dll");
-    let proc_name = b"IsWow64Process2\0";
-    let module = unsafe { ffi::GetModuleHandleW(kernel32.as_ptr()) };
-    if !module.is_null() {
-        let proc = unsafe { ffi::GetProcAddress(module, proc_name.as_ptr()) };
-        if !proc.is_null() {
-            let is_wow64_process2: ffi::IsWow64Process2Fn = unsafe { std::mem::transmute(proc) };
-            let mut process_machine: u16 = 0;
-            let mut native_machine: u16 = 0;
-            // GetCurrentProcess() 返回伪句柄（不需关闭）
-            let ok = unsafe {
-                is_wow64_process2(
-                    GetCurrentProcess().0,
-                    &mut process_machine,
-                    &mut native_machine,
-                )
-            };
-            if ok != 0 {
-                return match native_machine {
-                    0xAA64 => "arm64", // IMAGE_FILE_MACHINE_ARM64
-                    332 => "x86",      // 0x014C IMAGE_FILE_MACHINE_I386
-                    _ => "x64",        // 0x8664 IMAGE_FILE_MACHINE_AMD64 及其余
-                };
+    // Resolve dynamically so older Windows versions can use the environment fallback.
+    type IsWow64Process2 = unsafe extern "system" fn(HANDLE, *mut u16, *mut u16) -> BOOL;
+    if let Ok(module) = unsafe { GetModuleHandleW(w!("kernel32.dll")) } {
+        if let Some(proc) = unsafe { GetProcAddress(module, s!("IsWow64Process2")) } {
+            let query: IsWow64Process2 = unsafe { std::mem::transmute(proc) };
+            let (mut process, mut native) = (0, 0);
+            if unsafe { query(GetCurrentProcess(), &mut process, &mut native) }.as_bool() {
+                return match native { 0xAA64 => "arm64", 332 => "x86", _ => "x64" };
             }
         }
     }
@@ -1700,9 +1685,7 @@ fn offline_url(arch: &str) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 后台线程 <-> UI 的消息
-// ---------------------------------------------------------------------------
 
 enum BgMsg {
     /// 自动流程已判明架构，开始下载
@@ -1725,9 +1708,7 @@ fn notify(tx: &Sender<BgMsg>, ctx: &egui::Context, msg: BgMsg) {
     ctx.request_repaint();
 }
 
-// ---------------------------------------------------------------------------
 // 自动安装流程（在后台线程运行）
-// ---------------------------------------------------------------------------
 
 /// 自动流程线程入口：任何 Err 都转成 Failed 消息推给 UI。
 fn worker_auto(tx: Sender<BgMsg>, ctx: egui::Context) {
@@ -1797,43 +1778,22 @@ fn auto_install_flow(tx: &Sender<BgMsg>, ctx: &egui::Context) -> Result<(), Stri
     notify(tx, ctx, BgMsg::UacPrompt);
     std::thread::sleep(Duration::from_millis(900));
 
-    let verb = wide("runas");
-    let file_w = wide(&dest.to_string_lossy());
-    let args = wide("/silent /install");
-    let mut info = ffi::ShellExecuteInfoW {
-        cb_size: std::mem::size_of::<ffi::ShellExecuteInfoW>() as u32,
-        f_mask: SEE_MASK_NOCLOSEPROCESS,
-        hwnd: std::ptr::null_mut(),
-        lp_verb: verb.as_ptr(),
-        lp_file: file_w.as_ptr(),
-        lp_parameters: args.as_ptr(),
-        lp_directory: std::ptr::null(),
-        n_show: SW_SHOW,
-        h_inst_app: std::ptr::null_mut(),
-        lp_id_list: std::ptr::null_mut(),
-        lp_class: std::ptr::null(),
-        hkey_class: std::ptr::null_mut(),
-        dw_hot_key: 0,
-        h_icon: std::ptr::null_mut(),
-        h_process: std::ptr::null_mut(),
+    let file_w: Vec<u16> = dest.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("runas"), lpFile: PCWSTR(file_w.as_ptr()), lpParameters: w!("/silent /install"),
+        nShow: SW_SHOW.0, ..Default::default()
     };
-    let ok = unsafe { ffi::ShellExecuteExW(&mut info) };
-    if ok == 0 {
-        // 常见原因：用户在 UAC 弹窗点了【否】（ERROR_CANCELLED）
-        let os_err = std::io::Error::last_os_error();
-        return Err(format!(
-            "启动安装程序失败（{os_err}）。若刚才弹出了系统授权窗口并选择了【否】，可点击重试"
-        ));
-    }
-
-    // ④ 阶段二：等待安装器进程退出（不确定进度，UI 滚动动画）
+    unsafe { ShellExecuteExW(&mut info) }.map_err(|error| {
+        let os_err = std::io::Error::from_raw_os_error(error.code().0 & 0xffff);
+        format!("启动安装程序失败（{os_err}）。若刚才弹出了系统授权窗口并选择了【否】，可点击重试")
+    })?;
     notify(tx, ctx, BgMsg::Installing);
-    if !info.h_process.is_null() {
-        let handle = HANDLE(info.h_process);
+    if !info.hProcess.is_invalid() {
         unsafe {
-            // INFINITE 等待：UAC 弹窗确认 + 静默安装全程都在安装器进程生命周期内
-            let _ = WaitForSingleObject(handle, INFINITE);
-            let _ = CloseHandle(handle);
+            let _ = WaitForSingleObject(info.hProcess, INFINITE);
+            let _ = CloseHandle(info.hProcess);
         }
     }
 
@@ -1849,9 +1809,7 @@ fn auto_install_flow(tx: &Sender<BgMsg>, ctx: &egui::Context) -> Result<(), Stri
     Err("安装程序已结束，但未检测到 WebView2，请改用手动下载".to_string())
 }
 
-// ---------------------------------------------------------------------------
 // 手动下载流程（在后台线程运行）
-// ---------------------------------------------------------------------------
 
 /// 手动流程线程入口：打开官方下载页 + 每 1s 轮询注册表，装好自动继续。
 fn worker_manual(tx: Sender<BgMsg>, ctx: egui::Context) {
@@ -1875,9 +1833,7 @@ fn worker_manual(tx: Sender<BgMsg>, ctx: egui::Context) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // egui 引导小窗
-// ---------------------------------------------------------------------------
 
 /// 小窗当前阶段。
 #[derive(Clone)]
@@ -2173,7 +2129,6 @@ impl eframe::App for GuideApp {
     }
 }
 
-
 // ============================ commands（Tauri 命令层；独立 mod 以便 generate_handler 路径引用） ============================
 
 mod commands {
@@ -2322,7 +2277,6 @@ mod regression_tests {
     }
 }
 
-
 #[tauri::command]
 pub fn set_paths(lol_root: String, steam_root: String) -> Result<AppStatus, String> {
     let _settings = SETTINGS_OP.lock().unwrap();
@@ -2350,12 +2304,10 @@ pub fn set_paths(lol_root: String, steam_root: String) -> Result<AppStatus, Stri
     Ok(status)
 }
 
-
 #[tauri::command]
 pub fn get_settings() -> Result<Settings, String> {
     checked_settings()
 }
-
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn set_settings(mut settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
@@ -2397,7 +2349,6 @@ pub fn set_settings(mut settings: Settings, app: tauri::AppHandle) -> Result<(),
     Ok(())
 }
 
-
 #[tauri::command]
 pub fn open_data_dir() -> Result<(), String> {
     let dir = data_dir();
@@ -2407,7 +2358,6 @@ pub fn open_data_dir() -> Result<(), String> {
         .map(|_| ())
         .map_err(|e| format!("打开数据目录失败：{e}"))
 }
-
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_logs(filter: String) -> Vec<LogEntry> {
@@ -2426,7 +2376,6 @@ pub fn list_logs(filter: String) -> Vec<LogEntry> {
     out
 }
 
-
 #[tauri::command]
 pub async fn steam_cover(include_global: bool, app: tauri::AppHandle) -> Result<CoverReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2437,7 +2386,6 @@ pub async fn steam_cover(include_global: bool, app: tauri::AppHandle) -> Result<
     .await
     .map_err(|e| format!("后台任务失败: {e}"))?
 }
-
 
 #[tauri::command]
 pub fn start(app: tauri::AppHandle) -> Result<(), String> {
@@ -2486,7 +2434,6 @@ pub fn start(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-
 #[tauri::command]
 pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
     let cell = GUARD.get_or_init(|| Mutex::new(None));
@@ -2527,13 +2474,11 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
     Ok(summary)
 }
 
-
 /// 账号列表（前端账号模态渲染）
 #[tauri::command]
 pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
     Ok(accounts_list_v())
 }
-
 
 /// 切换账号（杀 Steam/轮询可阻塞 ~30s+，async + spawn_blocking 不冻结 UI）
 #[tauri::command]
@@ -2546,7 +2491,6 @@ pub async fn switch_account(sid64: String, app: AppHandle) -> Result<String, Str
     Ok(name)
 }
 
-
 /// 删除账号（前端已做二次确认；整目录删除走后台线程）
 #[tauri::command]
 pub async fn delete_account(sid64: String, app: AppHandle) -> Result<String, String> {
@@ -2557,7 +2501,6 @@ pub async fn delete_account(sid64: String, app: AppHandle) -> Result<String, Str
     let _ = app.emit("steam-accounts-changed", ());
     Ok(name)
 }
-
 
 /// 新增登录 + 串联自动覆盖（2026-09-20 用户确认：登录+配置一步到位）。
 /// 密码不写日志；登录轮询最长 ~180s（等 SteamGuard），必须走后台线程。
@@ -2578,38 +2521,20 @@ pub async fn login_new(account: String, password: String, app: AppHandle) -> Res
                 // 后台最长 10 分钟盯 loginusers.vdf，确认登录成功后自动补跑串联覆盖，
                 // 与即时成功路径等效；期间用户手动重试也不冲突（STEAM_OP 串行）。
                 if e.contains("登录确认超时") {
-                    let acct = account.clone();
-                    let pass = password.clone();
                     let app3 = app2.clone();
-                    let _ = thread::Builder::new()
-                        .name("login-late-confirm".to_string())
-                        .spawn(move || {
-                            for _ in 0..300 {
-                                thread::sleep(Duration::from_secs(2));
-                                if STEAM_GENERATION.load(Ordering::SeqCst) != generation { return; }
-                                let Some(acc) = confirmed_account(&acct, before_ts)
-                                else {
-                                    continue;
-                                };
-                                let display = display_name(&acc.persona_name, &acc.account_name);
-                                let include_global = load_settings().global_cover_on;
-                                let _steam_op = STEAM_OP.lock().unwrap();   // 与常规 Steam 操作串行
-                                if STEAM_GENERATION.load(Ordering::SeqCst) != generation
-                                    || get_cred(&acct).as_deref() != Some(pass.as_str())
-                                    || confirmed_account(&acct, before_ts).is_none() { return; }
-                                backup::confirmed_login(&acct, &pass, "新增登录确认");
-                                let note = match cover_locked(include_global, app3.clone()) {
-                                    Ok(rep) => {
-                                        format!("，已自动补覆盖配置（{}/{} 成功）", rep.ok, rep.total)
-                                    }
-                                    Err(err) => format!("，补覆盖未完成：{err}"),
-                                };
-                                log("acct", "晚到登录确认", &format!("{display} 已登录（登录耗时较长）{note}"), true);
-                                let _ = app3.emit("steam-accounts-changed", ());
-                                return;
-                            }
+                    watch_login(account, password, before_ts, generation, "新增登录确认", move |confirmed| {
+                        if let Some(acc) = confirmed {
+                            let display = display_name(&acc.persona_name, &acc.account_name);
+                            let note = match cover_locked(load_settings().global_cover_on, app3.clone()) {
+                                Ok(rep) => format!("，已自动补覆盖配置（{}/{} 成功）", rep.ok, rep.total),
+                                Err(err) => format!("，补覆盖未完成：{err}"),
+                            };
+                            log("acct", "晚到登录确认", &format!("{display} 已登录（登录耗时较长）{note}"), true);
+                            let _ = app3.emit("steam-accounts-changed", ());
+                        } else {
                             log("acct", "晚到登录确认", "10 分钟内仍未检测到该账号登录成功，如需重试请点列表「登录」（密码已保存）", false);
-                        });
+                        }
+                    });
                 }
                 return Err(e);
             }

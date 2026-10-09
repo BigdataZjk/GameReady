@@ -65,7 +65,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         } }
       };
     });
-    await page.goto(pathToFileURL(path.resolve(__dirname, '../frontend/index.html')).href + '#steam');
+    await page.goto(pathToFileURL(path.resolve(__dirname, '../assets/index.html')).href + '#steam');
     // App startup intentionally selects the first game tab instead of the URL hash.
     await page.locator('#nav-steam').click();
     await page.locator('#openBackup').click();

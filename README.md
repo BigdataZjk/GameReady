@@ -41,7 +41,9 @@ Windows 游戏配置便携工具，支持 LOL 配置守护、Steam 设置与账�
 需要 Rust stable、MSVC C++ 构建工具和 Windows SDK。前端为静态 HTML，无需 Node 构建。
 
 ```powershell
-.\build.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
 ```
 
-统一调用 `scripts/release.ps1`：生成根目录的 `gameready.exe`，并在 `release` 目录生成已清除编译机路径信息的 exe 和 zip。`build.bat clean` 可在构建后清理缓存。
+生成根目录的 `gameready.exe`，并在 `release` 目录生成已清除编译机路径信息的 exe 和 zip。加 `-Clean` 可在构建后清理缓存。
+
+`src` 放程序和测试，`assets` 放界面、图标及合并后的内置模板；`Data` 仍只在运行时生成。
