@@ -1,11 +1,17 @@
 [CmdletBinding()]
-param()
+param([switch]$Clean)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $oldEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
 Push-Location $projectRoot
 try {
+    $version = (Get-Content -LiteralPath 'tauri.conf.json' -Encoding UTF8 -Raw | ConvertFrom-Json).version
+    $metadata = cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot read package metadata' }
+    $packageVersion = ($metadata.packages | Where-Object { $_.name -eq 'gameready' }).version
+    if ($version -ne $packageVersion) { throw 'Cargo and Tauri versions must match' }
+
     # Cargo's encoded flags preserve paths containing spaces. Remap both path
     # separators so Rust diagnostics embedded in the executable expose no local profile.
     $flags = @()
@@ -23,7 +29,6 @@ try {
     cargo build --release --locked --bin gameready --features custom-protocol
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
 
-    $version = (Get-Content -LiteralPath 'tauri.conf.json' -Raw | ConvertFrom-Json).version
     $assetBase = "GameReady-$version-windows-x64"
     $releaseDir = Join-Path $projectRoot 'release'
     [void](New-Item -ItemType Directory -Path $releaseDir -Force)
@@ -58,8 +63,20 @@ try {
     } finally {
         if (Test-Path -LiteralPath $zipTemp) { Remove-Item -LiteralPath $zipTemp }
     }
-    Get-FileHash -Algorithm SHA256 -LiteralPath $exeAsset, $zipAsset |
-        Select-Object @{Name='Asset';Expression={Split-Path $_.Path -Leaf}}, Hash
+    foreach ($asset in @($exeAsset, $zipAsset)) {
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        $stream = [IO.File]::OpenRead($asset)
+        try {
+            [pscustomobject]@{
+                Asset = [IO.Path]::GetFileName($asset)
+                Hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '')
+            }
+        } finally { $stream.Dispose(); $sha256.Dispose() }
+    }
+    if ($Clean) {
+        cargo clean
+        if ($LASTEXITCODE -ne 0) { throw 'Build cache cleanup failed' }
+    }
 } finally {
     $env:CARGO_ENCODED_RUSTFLAGS = $oldEncodedFlags
     Pop-Location

@@ -44,8 +44,4 @@ Windows 游戏配置便携工具，支持 LOL 配置守护、Steam 设置与账�
 .\build.bat
 ```
 
-生成的 `gameready.exe` 位于项目根目录。发布时使用以下脚本，自动移除编译机路径信息并在 `release` 目录生成 exe 和 zip：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1
-```
+统一调用 `scripts/release.ps1`：生成根目录的 `gameready.exe`，并在 `release` 目录生成已清除编译机路径信息的 exe 和 zip。`build.bat clean` 可在构建后清理缓存。

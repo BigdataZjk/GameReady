@@ -1,4 +1,4 @@
-//! Merge preference templates without replacing account/session data.
+//! Steam VDF parsing, account records and preference merging.
 #[derive(Clone, Debug, PartialEq)]
 enum Value { Text(String), Object(Vec<(String, Value)>) }
 
@@ -90,22 +90,76 @@ pub fn merge(existing: &[u8], template: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output.into_bytes())
 }
 
-pub fn validate_users(text: &str) -> Result<(), String> {
-    let tree = parse(text)?;
-    if tree.len() != 1 || !tree[0].0.eq_ignore_ascii_case("users") { return Err("loginusers.vdf 根节点无效，原文件已保留".into()); }
-    let Value::Object(users) = &tree[0].1 else { return Err("loginusers.vdf 账号列表格式无效".into()); };
-    for (id, value) in users {
-        let Value::Object(fields) = value else { return Err("loginusers.vdf 账号块格式无效".into()); };
-        if id.parse::<u64>().is_err() || fields.iter().any(|(_, v)| !matches!(v, Value::Text(_))) {
-            return Err("loginusers.vdf 含无法识别的账号字段，原文件已保留".into());
+#[derive(Debug, PartialEq)]
+pub struct Account {
+    pub sid64: String,
+    pub fields: Vec<(String, String)>,
+}
+
+impl Account {
+    pub fn set(&mut self, name: &str, value: &str) {
+        if let Some((_, current)) = self.fields.iter_mut().find(|(key, _)| key == name) {
+            *current = value.into();
+        } else {
+            self.fields.push((name.into(), value.into()));
         }
     }
-    Ok(())
+}
+
+pub fn parse_users(text: &str) -> Result<Vec<Account>, String> {
+    let tree = parse(text)?;
+    if tree.len() != 1 || !tree[0].0.eq_ignore_ascii_case("users") { return Err("loginusers.vdf 根节点无效，原文件已保留".into()); }
+    let (_, value) = tree.into_iter().next().unwrap();
+    let Value::Object(users) = value else { return Err("loginusers.vdf 账号列表格式无效".into()); };
+    users.into_iter().map(|(sid64, value)| {
+        let Value::Object(fields) = value else { return Err("loginusers.vdf 账号块格式无效".into()); };
+        if sid64.parse::<u64>().is_err() {
+            return Err("loginusers.vdf 含无法识别的账号字段，原文件已保留".into());
+        }
+        let fields = fields.into_iter().map(|(key, value)| match value {
+            Value::Text(value) => Ok((key, value)),
+            _ => Err("loginusers.vdf 含无法识别的账号字段，原文件已保留".to_string()),
+        }).collect::<Result<_, _>>()?;
+        Ok(Account { sid64, fields })
+    }).collect()
+}
+
+pub fn render_users(accounts: &[Account]) -> String {
+    let users = accounts.iter().map(|a| (a.sid64.clone(), Value::Object(a.fields.iter()
+        .map(|(key, value)| (key.clone(), Value::Text(value.clone()))).collect()))).collect();
+    let mut output = String::new();
+    render(&[("users".into(), Value::Object(users))], 0, &mut output);
+    output
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_records_preserve_order_escapes_and_unknown_fields() {
+        let text = "\u{feff}\"users\" { // Steam may use different whitespace\n\
+            \"76561197960265729\" { \"AccountName\" \"fixture\" \"PersonaName\" \"escaped \\\"quote\\\" 中文\" \"FutureField\" \"keep\" } \
+            \"76561197960265730\" { \"AccountName\" \"other\" \"AutoLogin\" \"1\" } }";
+        let mut accounts = parse_users(text).unwrap();
+        assert_eq!(accounts.len(), 2);
+        let original_fields = accounts[0].fields.clone();
+        accounts[0].set("AutoLogin", "1");
+        accounts[1].set("AutoLogin", "0");
+        assert_eq!(&accounts[0].fields[..3], original_fields);
+        assert_eq!(accounts[1].fields.len(), 2);
+        assert_eq!(parse_users(&render_users(&accounts)).unwrap(), accounts);
+        assert_eq!(render_users(&[]), "\"users\"\n{\n}\n");
+    }
+
+    #[test]
+    fn invalid_account_trees_are_rejected_without_partial_results() {
+        for text in ["", "\"other\" {}", "\"users\" \"invalid\"", "\"users\" { \"bad-id\" {} }",
+            "\"users\" { \"1\" \"invalid\" }", "\"users\" { \"1\" { \"nested\" {} } }",
+            "\"users\" { \"1\" {} \"2\" {", "\"users\" {} \"extra\" {}"] {
+            assert!(parse_users(text).is_err(), "Accepted invalid accounts: {text}");
+        }
+    }
+
     #[test]
     fn preferences_merge_without_losing_other_fields() {
         let original = br#""UserLocalConfigStore" { "system" { "InGameOverlayShortcutKey" "OLD" "unknown" "keep" } "session" { "fixture" "unchanged" } }"#;

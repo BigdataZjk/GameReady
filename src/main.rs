@@ -1,7 +1,7 @@
 // GameReady 主入口：WebView2 引导 → Tauri 应用
-// 各模块接口合同见 docs/PROTOCOL.md（勿随意改此文件，属共享文件）
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::borrow::Cow;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::windows::process::CommandExt;
@@ -25,6 +25,7 @@ use windows::Win32::System::Threading::{GetCurrentProcess, WaitForSingleObject, 
 
 mod backup;
 mod vdf;
+use vdf::Account as RawAccount;
 
 
 /// 托盘唤起主窗口
@@ -109,16 +110,9 @@ fn main() {
 
 
 // ============================ store ============================
-// store.rs —— 数据目录、设置存储与全工程共享类型定义
-// 合同：docs/PROTOCOL.md「共享类型」「store 模块」两节，类型字段/函数签名不得偏离。
 // 便携原则：数据一律存 exe 同级 Data\（settings.json 等），用 current_exe 定位，
 // 不依赖工作目录。设置读写在低频场景（命令触发），原子写保证文件完整性，
 // 并发读到旧值无害，故不额外加锁。
-// PROTOCOL-NOTE（2 条，详见各处行内注释）：
-// 1. AppStatus.lol_guard_on 无来源：合同未给 guard 模块定义查询函数，本模块维护
-// 全局开关 set_guard_running()，guard start/stop 时需调用，否则该字段恒 false。
-// 2. detect_default_roots 返回元组顺序未在合同写明，按参数命名惯例定为 (LOL, Steam)。
-// ==================== 共享类型（其他模块 use *） ====================
 
 /// 应用总状态（get_status 返回；字段保持 snake_case，前端直接用同名 key）
 #[derive(Serialize, Deserialize, Clone)]
@@ -312,28 +306,29 @@ fn checked_settings() -> Result<Settings, String> {
     }
 }
 
-fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("序列化失败：{e}"))?;
+/// Write beside the destination, then replace it only after the complete write succeeds.
+/// Frequent game-config writes skip fsync; credentials and settings persist before replacement.
+fn atomic_write(path: &Path, bytes: &[u8], durable: bool) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> std::io::Result<()> {
+    let result = (|| {
         let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
+        file.write_all(bytes)?;
+        if durable { file.sync_all()?; }
         drop(file);
         fs::rename(&tmp, path)
     })();
-    if let Err(e) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(format!("保存 {} 失败：{e}，原文件已保留", path.file_name().unwrap_or_default().to_string_lossy()));
-    }
-    Ok(())
+    if result.is_err() { let _ = fs::remove_file(&tmp); }
+    result
+}
+
+fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("序列化失败：{e}"))?;
+    atomic_write(path, &bytes, true).map_err(|e| format!("保存 {} 失败：{e}，原文件已保留",
+        path.file_name().unwrap_or_default().to_string_lossy()))
 }
 
 // ==================== LOL 守护运行状态（AppStatus.lol_guard_on 数据源） ====================
 
-// PROTOCOL-NOTE: 合同定义了 AppStatus.lol_guard_on 字段，但未给 guard 模块定义
-// 查询函数；故在此维护全局开关。guard 模块应在 start 成功后调 set_guard_running(true)、
-// stop 后调 set_guard_running(false)。不调用不会编译出错，仅该字段恒显示 false。
 static GUARD_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// 由 guard 模块 start/stop 时调用，维护 LOL 守护运行标志
@@ -352,18 +347,11 @@ fn sid3_to_id64(sid3: &str) -> Option<String> {
 
 // ==================== Tauri commands ====================
 // 各 command 的实现统一在文件尾 mod commands（generate_handler 路径引用需要独立 mod）。
-// PROTOCOL-NOTE: 带参数的 command 使用 rename_all="snake_case"，前端按合同 Rust 签名
-// 同名传键：invoke('set_paths', { lol_root, steam_root })。Tauri 2 默认规则是 camelCase
-// （lolRoot/steamRoot），两者不兼容；若前端统一用 camelCase，去掉 rename_all 即可。
 
 // ============================ logger ============================
-// logger.rs —— 覆盖日志模块（R12）
 // 存储：exe 同级 Data\logs.jsonl，一行一条 LogEntry 的 JSON（追加写）；
 // 超过 5000 条时整体重写、保留最新 5000（日志写入低频，全量重写可接受）。
 // 事件：每条日志追加后推 "log-appended"（payload = LogEntry，前端日志页前插展示）。
-// PROTOCOL-NOTE: 合同 log() 签名不带 AppHandle 参数，故进程内持一份全局句柄，
-// 由 spawn（main.rs setup 调用）注入；注入完成前（理论上只有启动瞬间）的
-// log 仅落盘不推事件。main.rs 无需为此改动。
 /// 日志保留上限（R12：超限截断保留最新）
 const MAX_ENTRIES: usize = 5000;
 
@@ -417,22 +405,14 @@ fn append_and_truncate(entry: &LogEntry) {
     }
     // 文件按追加序即时间升序，保留末尾（最新）MAX_ENTRIES 条；先写临时文件再原子替换
     let keep = &lines[lines.len() - MAX_ENTRIES..];
-    let tmp = data_dir().join("logs.jsonl.tmp");
-    if let Ok(mut w) = File::create(&tmp) {
-        for l in keep {
-            let _ = writeln!(w, "{l}");
-        }
-        drop(w);
-        // Windows 下 std rename 可覆盖已存在文件；失败则保留原文件，下次写入再试
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    let bytes = keep.join("\n") + "\n";
+    let _ = atomic_write(&path, bytes.as_bytes(), false);
 }
 
 // 日志读取命令位于 commands 模块，按时间降序返回。
 
 
 // ============================ watcher ============================
-// watcher.rs —— 游戏进程活跃监听（R1 左列绿点数据源）
 // 后台线程每 2s 用 sysinfo 枚举进程：
 // LOL 活跃   = 存在 LeagueClient.exe（客户端大厅）或 League of Legends.exe（对局）
 // Steam 活跃 = 存在 steam.exe
@@ -463,8 +443,6 @@ fn run(app: tauri::AppHandle) {
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::new()),
     );
-    // PROTOCOL-NOTE: sysinfo 0.30 的 Process::name() 返回 &str（0.31+ 才是 &OsStr），
-    // 故用 to_lowercase 直接比较，不适用 to_string_lossy。
     let mut last: Option<(bool, bool)> = None; // None = 尚未推过任何状态
     let mut round: u32 = 0;
     loop {
@@ -480,15 +458,15 @@ fn run(app: tauri::AppHandle) {
     }
 }
 
-/// 枚举一次进程表，返回 (LOL 活跃, Steam 活跃)；进程名统一小写后精确匹配
+/// 枚举一次进程表，返回 (LOL 活跃, Steam 活跃)；忽略进程名大小写。
 fn scan(sys: &System) -> (bool, bool) {
     let mut lol = false;
     let mut steam = false;
     for p in sys.processes().values() {
-        let name = p.name().to_lowercase();
-        if name == "leagueclient.exe" || name == "league of legends.exe" {
+        let name = p.name();
+        if name.eq_ignore_ascii_case("leagueclient.exe") || name.eq_ignore_ascii_case("league of legends.exe") {
             lol = true;
-        } else if name == "steam.exe" {
+        } else if name.eq_ignore_ascii_case("steam.exe") {
             steam = true;
         }
     }
@@ -497,7 +475,6 @@ fn scan(sys: &System) -> (bool, bool) {
 
 
 // ============================ packs ============================
-// packs.rs —— 内置配置包（编译期内嵌）与覆盖写盘引擎。
 // 7 个配置文件 include_bytes! 嵌入 exe（源在仓库 packs/ 下，只读资产）；
 // write_all 按 scope 过滤后写入目标根目录，并把产物三项时间戳统一设为
 // 本地 2000-01-01 00:00:00（覆盖标识：区分 GameReady 产物与游戏回写）。
@@ -525,40 +502,40 @@ pub struct PackFile {
 static FILES: [PackFile; 7] = [
     // ── LOL：Game\Config（对局内配置）──
     PackFile {
-        bytes: include_bytes!("../packs/lol/Game/Config/game.cfg"),
+        bytes: include_bytes!("../packs/game.cfg"),
         rel: r"Game\Config\game.cfg",
         scope: PackScope::Lol,
     },
     PackFile {
-        bytes: include_bytes!("../packs/lol/Game/Config/input.ini"),
+        bytes: include_bytes!("../packs/input.ini"),
         rel: r"Game\Config\input.ini",
         scope: PackScope::Lol,
     },
     PackFile {
-        bytes: include_bytes!("../packs/lol/Game/Config/PersistedSettings.json"),
+        bytes: include_bytes!("../packs/PersistedSettings.json"),
         rel: r"Game\Config\PersistedSettings.json",
         scope: PackScope::Lol,
     },
     // ── LOL：LeagueClient\Config（客户端偏好，均无账号字段）──
     PackFile {
-        bytes: include_bytes!("../packs/lol/LeagueClient/Config/LCUAccountPreferences.yaml"),
+        bytes: include_bytes!("../packs/LCUAccountPreferences.yaml"),
         rel: r"LeagueClient\Config\LCUAccountPreferences.yaml",
         scope: PackScope::Lol,
     },
     PackFile {
-        bytes: include_bytes!("../packs/lol/LeagueClient/Config/LCULocalPreferences.yaml"),
+        bytes: include_bytes!("../packs/LCULocalPreferences.yaml"),
         rel: r"LeagueClient\Config\LCULocalPreferences.yaml",
         scope: PackScope::Lol,
     },
     // ── Steam：全局配置 ──
     PackFile {
-        bytes: include_bytes!("../packs/steam/config.vdf"),
+        bytes: include_bytes!("../packs/config.vdf"),
         rel: r"config\config.vdf",
         scope: PackScope::SteamGlobal,
     },
     // ── Steam：当前账号配置（{SID3} 占位，写盘时替换）──
     PackFile {
-        bytes: include_bytes!("../packs/steam/localconfig.vdf"),
+        bytes: include_bytes!("../packs/localconfig.vdf"),
         rel: r"userdata\{SID3}\config\localconfig.vdf",
         scope: PackScope::SteamAccount,
     },
@@ -612,10 +589,10 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
                 },
             };
             match vdf::merge(&existing, f.bytes) {
-                Ok(bytes) => bytes,
+                Ok(bytes) => Cow::Owned(bytes),
                 Err(e) => { r.ok = false; r.err = Some(e); out.push(r); continue; },
             }
-        } else { f.bytes.to_vec() };
+        } else { Cow::Borrowed(f.bytes) };
 
         // 父目录不存在则创建（userdata\{SID3}\config 等深层目录）
         if let Some(parent) = target.parent() {
@@ -628,10 +605,8 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
         }
 
         // 原子写：先写 .tmp 再 rename 覆盖（守护每 200ms 一轮，避免游戏恰好读到半截文件）
-        let tmp = target.with_extension(format!("{}.gameready.tmp", uuid::Uuid::new_v4()));
-        match fs::write(&tmp, &bytes).and_then(|_| fs::rename(&tmp, &target)) {
+        match atomic_write(&target, &bytes, false) {
             Err(e) => {
-                let _ = fs::remove_file(&tmp);
                 r.ok = false;
                 r.err = Some(format!("写入失败: {e}"));
             }
@@ -648,22 +623,16 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
 }
 
 /// 把目标文件的创建/修改/访问时间统一设为本地 2000-01-01 00:00:00。
-/// 修改/访问时间用 filetime crate；创建时间标准库无 API，走 Win32 SetFileTime。
 fn set_stamp_2000(path: &Path) -> Result<(), String> {
     use chrono::TimeZone;
-    // 本地时区 2000-01-01 00:00:00 对应的 UTC Unix 秒（filetime 按 UTC 秒换算）
+    // 本地时区 2000-01-01 00:00:00 对应的 UTC Unix 秒。
     let secs = chrono::Local
         .with_ymd_and_hms(2000, 1, 1, 0, 0, 0)
         .single()
         .ok_or_else(|| "本地时间 2000-01-01 00:00:00 换算失败".to_string())?
         .timestamp();
 
-    // ① 修改 + 访问时间
-    let ft = filetime::FileTime::from_unix_time(secs, 0);
-    filetime::set_file_times(path, ft, ft)
-        .map_err(|e| format!("修改/访问时间设置失败: {e}"))?;
-
-    // ② 创建时间（Win32）
+    // SetFileTime sets creation, access and modification time in one call.
     unsafe { set_create_time(path, secs) }
 }
 
@@ -716,7 +685,6 @@ unsafe fn set_create_time(path: &Path, unix_secs: i64) -> Result<(), String> {
 
 
 // ============================ cover ============================
-// cover.rs —— Steam 一键覆盖（大按钮，R17 全链路自动化）。
 // 顺序：steam_root → 当前账号 SteamID3 + 账号名（杀 Steam 前锁定，②b）→
 // 优雅退出等完全退出（超时 Err）→ 写账号组（可选全局组）→ 日志 →
 // 凭据直登重启（2026-09-28）→ 推 "cover-done"。
@@ -879,7 +847,6 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
 
 
 // ============================ guard ============================
-// guard.rs —— LOL 守护：后台线程每 200ms 循环覆盖内置 LOL 配置，
 // 对抗 PersistedSettings.json 等文件的服务端同步回写。
 // start 幂等（已在跑直接 Ok）；每 1s 推 "guard-stats"（count 语义 =
 // 累计覆盖轮次，一轮 +1）；连续 5 轮全部文件失败 → 失败日志 +
@@ -1006,10 +973,9 @@ fn fmt_duration(ms: u64) -> String {
 
 
 // ============================ steam ============================
-// GameReady · Steam 账号管理模块（src/steam.rs）
+// Steam 账号管理
 // 职责：loginusers.vdf 极简解析/重建（保持实测 Tab 格式，Steam 退出后才能写）、
 // 注册表 AutoLoginUser 读写、Steam 进程检测/强杀/启动、账号列表/切换/删除/新增登录。
-// 依据：docs/PROTOCOL.md "steam 模块" 合同 + design/调研-配置文件位置.md 实测结论。
 // 实测 loginusers.vdf 字节级格式（LF 换行、无 BOM）：
 // "users"\n{\n\t"<SteamID64>"\n\t{\n\t\t"字段"\t\t"值"\n...\t}\n}\n
 // 字段顺序：AccountName/PersonaName/RememberPassword/WantsOfflineMode/SkipOfflineModeWarning/AutoLogin/Timestamp
@@ -1030,13 +996,6 @@ pub struct SteamAccount {
     pub persona_name: String,
     pub auto_login: bool,
     pub timestamp: i64,
-}
-
-/// loginusers.vdf 内部原始账号块：保留字段原始顺序与全部键值（含未来 Steam 新增的未知字段），
-/// 写回时按原样重建，只改 AutoLogin 或整块删除，最大限度不丢信息。
-struct RawAccount {
-    sid64: String,
-    fields: Vec<(String, String)>,
 }
 
 // ---------------- 基础路径与注册表 ----------------
@@ -1073,68 +1032,6 @@ fn registry_set_autologin_user(account: &str) -> Result<(), String> {
 
 // ---------------- vdf 解析与重建 ----------------
 
-/// 解析一行，返回 (key, Option<value>)。
-/// 三种形态：`"key"`（无值，如 "users"、账号 SteamID64 行）、`"key"\t\t"value"`、其他（返回 None）。
-fn parse_line(line: &str) -> Option<(String, Option<String>)> {
-    let line = line.trim_start();
-    if !line.starts_with('"') {
-        return None;
-    }
-    let rest = &line[1..];
-    let key_end = rest.find('"')?;
-    let key = rest[..key_end].to_string();
-    let after = rest[key_end + 1..].trim();
-    if after.is_empty() {
-        return Some((key, None));
-    }
-    let after = after.strip_prefix('"')?;
-    let val_end = after.rfind('"')?;
-    Some((key, Some(after[..val_end].to_string())))
-}
-
-/// 极简 vdf 解析器：逐行处理，去 BOM、跳过空行与 `#`/`//` 注释行，
-/// 大括号嵌套一层（"users" → 账号块），输出原始账号块列表（保持字段顺序）。
-fn parse_vdf(text: &str) -> Vec<RawAccount> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text); // 去 UTF-8 BOM
-    let mut accounts: Vec<RawAccount> = Vec::new();
-    let mut cur: Option<RawAccount> = None;
-    let mut depth: usize = 0;
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
-            continue;
-        }
-        if line.starts_with('{') {
-            depth += 1;
-            continue;
-        }
-        if line.starts_with('}') {
-            depth = depth.saturating_sub(1);
-            // 账号块结束（depth 从 2 → 1）：收下当前账号
-            if depth == 1 {
-                if let Some(acc) = cur.take() {
-                    accounts.push(acc);
-                }
-            }
-            continue;
-        }
-        if let Some((key, val)) = parse_line(line) {
-            match (depth, val) {
-                // users 层的无值键 = 账号 SteamID64，开启新账号块
-                (1, None) => cur = Some(RawAccount { sid64: key, fields: Vec::new() }),
-                // 账号块内的键值对 = 字段
-                (2, Some(v)) => {
-                    if let Some(a) = cur.as_mut() {
-                        a.fields.push((key, v));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    accounts
-}
-
 /// 从原始账号块取字段值
 fn field<'a>(a: &'a RawAccount, name: &str) -> Option<&'a str> {
     a.fields
@@ -1143,32 +1040,13 @@ fn field<'a>(a: &'a RawAccount, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// 设置账号块的 AutoLogin 字段（无则追加到块尾）
-fn set_autologin(a: &mut RawAccount, val: &str) {
-    for (k, v) in a.fields.iter_mut() {
-        if k == "AutoLogin" {
-            *v = val.to_string();
-            return;
-        }
-    }
-    a.fields.push(("AutoLogin".to_string(), val.to_string()));
-}
-
 /// 设置账号块的 RememberPassword 字段（无则追加）。写回整份 vdf。
 /// 背景：-login 登录不保存 Steam 端免密凭据（详见下方凭据存储区），置 1 仅保登录页
 /// UI 勾选态正确。⚠ 只能在 Steam 已完全退出后调用（运行中写会被退出回写覆盖）。
 fn set_remember_password(root: &str, sid64: &str, val: &str) {
-    let Ok(text) = read_vdf(root) else { return };
-    let mut accounts = parse_vdf(&text);
+    let Ok(mut accounts) = read_vdf(root) else { return };
     let Some(a) = accounts.iter_mut().find(|a| a.sid64 == sid64) else { return };
-    for (k, v) in a.fields.iter_mut() {
-        if k == "RememberPassword" {
-            *v = val.to_string();
-            let _ = write_vdf(root, &accounts);
-            return;
-        }
-    }
-    a.fields.push(("RememberPassword".to_string(), val.to_string()));
+    a.set("RememberPassword", val);
     let _ = write_vdf(root, &accounts);
 }
 
@@ -1189,36 +1067,17 @@ fn to_account(a: &RawAccount) -> SteamAccount {
     }
 }
 
-/// 按实测字节级格式重建整个 loginusers.vdf：
-/// "users" 一层，账号键一层 Tab，块内字段 `\t\t"字段"\t\t"值"`（字段名与值之间两个 Tab），LF 换行，末尾 `}\n`
-fn build_vdf(accounts: &[RawAccount]) -> String {
-    let mut s = String::from("\"users\"\n{\n");
-    for a in accounts {
-        s.push_str(&format!("\t\"{}\"\n\t{{\n", a.sid64));
-        for (k, v) in &a.fields {
-            s.push_str(&format!("\t\t\"{}\"\t\t\"{}\"\n", k, v));
-        }
-        s.push_str("\t}\n");
-    }
-    s.push_str("}\n");
-    s
-}
-
-/// 读 loginusers.vdf 全文（容错非 UTF-8 字节），文件不存在/不可读返回 Err
-fn read_vdf(root: &str) -> Result<String, String> {
-    let path = vdf_path(root);
-    let bytes = fs::read(&path).map_err(|e| format!("读取 loginusers.vdf 失败: {e}"))?;
+/// Read and validate account records in one parse; reject corrupt input before any write.
+fn read_vdf(root: &str) -> Result<Vec<RawAccount>, String> {
+    let bytes = fs::read(vdf_path(root)).map_err(|e| format!("读取 loginusers.vdf 失败: {e}"))?;
     let text = String::from_utf8(bytes).map_err(|_| "loginusers.vdf 不是 UTF-8 文本，原文件已保留".to_string())?;
-    vdf::validate_users(&text)?;
-    Ok(text)
+    vdf::parse_users(&text)
 }
 
-/// 原子写回 loginusers.vdf：先写 .tmp 再 rename 覆盖（调用前必须确保 Steam 已完全退出，否则会被回写覆盖）
+/// Steam must be fully stopped before replacing loginusers.vdf.
 fn write_vdf(root: &str, accounts: &[RawAccount]) -> Result<(), String> {
-    let path = vdf_path(root);
-    let tmp = path.with_extension("vdf.tmp");
-    fs::write(&tmp, build_vdf(accounts)).map_err(|e| format!("写入临时文件失败: {e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("替换 loginusers.vdf 失败: {e}"))
+    atomic_write(&vdf_path(root), vdf::render_users(accounts).as_bytes(), false)
+        .map_err(|e| format!("写入 loginusers.vdf 失败: {e}，原文件已保留"))
 }
 
 /// 显示名格式（合同）：PersonaName(AccountName)；昵称缺失时退化为 AccountName(AccountName)
@@ -1395,7 +1254,7 @@ pub fn accounts_list_v() -> Vec<SteamAccount> {
         Err(_) => return Vec::new(),
     };
     match read_vdf(&root) {
-        Ok(text) => parse_vdf(&text).iter().map(to_account).collect(),
+        Ok(accounts) => accounts.iter().map(to_account).collect(),
         Err(_) => Vec::new(),
     }
 }
@@ -1436,18 +1295,18 @@ pub fn switch(sid64: &str) -> Result<String, String> {
             }
         }
     }
-    let before = parse_vdf(&read_vdf(&root)?);
+    let before = read_vdf(&root)?;
     if !before.iter().any(|a| a.sid64 == sid64) { return Err("账号不存在，请刷新账号列表".into()); }
     kill_and_wait()?;
-    let mut accounts = parse_vdf(&read_vdf(&root)?);
+    let mut accounts = read_vdf(&root)?;
     let idx = accounts
         .iter()
         .position(|a| a.sid64 == sid64)
         .ok_or_else(|| "账号不存在，请刷新账号列表".to_string())?;
     for a in accounts.iter_mut() {
-        set_autologin(a, "0");
+        a.set("AutoLogin", "0");
     }
-    set_autologin(&mut accounts[idx], "1");
+    accounts[idx].set("AutoLogin", "1");
     let target = &accounts[idx];
     let account_name = field(target, "AccountName").unwrap_or("").to_string();
     let persona_name = field(target, "PersonaName").unwrap_or("").to_string();
@@ -1498,8 +1357,8 @@ pub fn switch(sid64: &str) -> Result<String, String> {
 
 /// 登录成功判据：loginusers.vdf 中该账号的 Timestamp 比 before 新
 fn login_confirmed(root: &str, sid64: &str, before_ts: i64) -> bool {
-    if let Ok(text) = read_vdf(root) {
-        if let Some(acc) = parse_vdf(&text).iter().find(|a| a.sid64 == sid64) {
+    if let Ok(accounts) = read_vdf(root) {
+        if let Some(acc) = accounts.iter().find(|a| a.sid64 == sid64) {
             return login_observed(&to_account(acc), is_steam_running(), registry_autologin_user().as_deref(),
                 field(acc, "AccountName").unwrap_or(""), before_ts);
         }
@@ -1550,7 +1409,7 @@ pub fn delete(sid64: &str) -> Result<String, String> {
     // 杀 Steam 前锁定当前账号名（Steam 退出过程会临时清掉注册表 AutoLoginUser），
     // 重启用它凭据直登恢复会话；被删的若是它则凭据已删，自然退化为无参启动
     let autologin_before = registry_autologin_user().unwrap_or_default();
-    let mut accounts = parse_vdf(&read_vdf(&root)?);
+    let mut accounts = read_vdf(&root)?;
     let idx = accounts
         .iter()
         .position(|a| a.sid64 == sid64)
@@ -1595,9 +1454,6 @@ pub fn delete(sid64: &str) -> Result<String, String> {
     Ok(display_name(&persona_name, &account_name))
 }
 
-// PROTOCOL-NOTE: 合同 pub fn login_new(&str,&str) 与 #[tauri::command] 同名无法共存
-// （Rust 限制），核心实现命名 login_new_locked（要求调用方持 STEAM_OP 锁），
-// command 保持合同名 login_new 供 generate_handler 注册，行为一致。
 /// 新增登录（核心实现，**调用方必须已持有 STEAM_OP 锁**）：杀 Steam → 注册表
 /// AutoLoginUser=account → steam.exe -login account password（密码仅存在于进程参数，
 /// 不写日志）→ 凭据先落盘 → 轮询 ≤180s 等 loginusers.vdf 出现该 AccountName → Ok(显示名)。
@@ -1641,14 +1497,6 @@ pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> R
 //   %TEMP%（真实百分比）→ ShellExecute "runas" /silent /install（UI 预告将弹一次
 //   UAC）→ 等安装器退出 → 复查 pv（≤30s 轮询）。
 // - 手动：开浏览器官方下载页 + 每 1s 轮询注册表，装好自动继续。
-// PROTOCOL-NOTE: 设计文档不在本机，实现依据 PROTOCOL.md 合同 + 定稿要点（fwlink 直链
-// 见 offline_url/MANUAL_URL；IsWow64Process2 映射 0xAA64→arm64、332→x86、其余→x64）。
-// PROTOCOL-NOTE: windows crate 0.58 的 IsWow64Process2 / ShellExecuteExW 所需 feature
-// 未启用且 Cargo.toml 禁改 → 手写等价 FFI（下方 mod ffi，kernel32/shell32 系统库）；
-// IsWow64Process2 经 GetProcAddress 动态解析，Win10 1511 前退化为环境变量判定。
-// ---------------------------------------------------------------------------
-// 常量
-// ---------------------------------------------------------------------------
 
 /// EdgeUpdate Clients 的 WebView2 固定 GUID 子键（检测读它的 pv 值）。
 const CLIENTS_SUBKEY: &str = concat!(
@@ -1667,10 +1515,6 @@ const SEE_MASK_NOCLOSEPROCESS: u32 = 0x40;
 
 /// SW_SHOW（ShellExecuteInfoW.nShow 的显示方式）。
 const SW_SHOW: i32 = 5;
-
-// ---------------------------------------------------------------------------
-// pub API（与 docs/PROTOCOL.md 合同一致）
-// ---------------------------------------------------------------------------
 
 /// 检测 WebView2 运行时是否已安装：4 处注册表任一有非空 pv 值即 true，
 /// 再兜底检查 `%ProgramFiles(x86)%\Microsoft\EdgeWebView\Application\` 是否存在。
@@ -1748,7 +1592,7 @@ fn webview_dir_exists() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// 手写 FFI（原因见模块头 PROTOCOL-NOTE）
+// Windows FFI；动态查询 API 以兼容较旧系统
 // ---------------------------------------------------------------------------
 
 mod ffi {
@@ -2380,6 +2224,49 @@ mod regression_tests {
     use super::*;
 
     #[test]
+    fn failed_atomic_replace_keeps_original_and_cleans_temporary_files() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let dir = std::env::temp_dir().join(format!("gameready-write-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("preserved.txt");
+        fs::write(&path, b"original").unwrap();
+        let guard = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ.0).open(&path).unwrap();
+        for durable in [false, true] {
+            assert!(atomic_write(&path, b"replacement", durable).is_err());
+            assert_eq!(fs::read(&path).unwrap(), b"original");
+            assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        }
+        drop(guard);
+        atomic_write(&path, b"complete", false).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"complete");
+        fs::remove_file(path).unwrap(); fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn embedded_lol_templates_keep_paths_contents_and_all_timestamps() {
+        use chrono::TimeZone;
+        let dir = std::env::temp_dir().join(format!("gameready-packs-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let result = write_all(&dir, PackScope::Lol, None);
+        assert_eq!(result.len(), 5);
+        assert!(result.iter().all(|r| r.ok && r.err.is_none()));
+        let expected = chrono::Local.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).single().unwrap().timestamp();
+        for pack in FILES.iter().filter(|p| p.scope == PackScope::Lol) {
+            let path = dir.join(pack.rel);
+            let meta = fs::metadata(&path).unwrap();
+            for stamp in [meta.created().unwrap(), meta.modified().unwrap(), meta.accessed().unwrap()] {
+                assert_eq!(stamp.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), expected as u64);
+            }
+            assert_eq!(fs::read(&path).unwrap(), pack.bytes);
+        }
+        let resolved = fs::canonicalize(&dir).unwrap();
+        assert!(resolved.starts_with(fs::canonicalize(std::env::temp_dir()).unwrap()));
+        assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("gameready-packs-test-"));
+        fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
     fn local_duplicates_are_replaced_with_latest_password() {
         let mut creds = std::collections::BTreeMap::from([
             ("Player".into(), "old".into()), ("PLAYER".into(), "older".into()), ("other".into(), "keep".into())]);
@@ -2413,9 +2300,9 @@ mod regression_tests {
         assert!(settings.global_cover_on); assert_eq!(settings.close_behavior, "tray");
         assert_eq!(settings.accent, "#00e5ff");
         let text = "\u{feff}\"users\"\r\n{\r\n\"76561197960265729\"\r\n{\r\n\"AccountName\" \"fixture\"\r\n\"Timestamp\" \"100\"\r\n\"FutureField\" \"keep\"\r\n}\r\n}\r\n";
-        let accounts = parse_vdf(text);
+        let accounts = vdf::parse_users(text).unwrap();
         assert_eq!(accounts.len(), 1); assert_eq!(field(&accounts[0], "Timestamp"), Some("100"));
-        let reparsed = parse_vdf(&build_vdf(&accounts));
+        let reparsed = vdf::parse_users(&vdf::render_users(&accounts)).unwrap();
         assert_eq!(field(&reparsed[0], "FutureField"), Some("keep"));
         assert_eq!(sid64_to_sid3(&accounts[0].sid64).as_deref(), Some("1"));
         assert!(sid64_to_sid3("invalid").is_none());
