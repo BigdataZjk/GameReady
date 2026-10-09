@@ -72,6 +72,7 @@ fn main() {
             commands::backup_save,
             commands::backup_test,
             commands::backup_sync,
+            commands::backup_save_password,
         ])
         .setup(|app| {
             // ③ 系统托盘（关闭到托盘模式的找回入口：双击/菜单"显示主窗口"，菜单"退出"）
@@ -1354,7 +1355,8 @@ pub fn save_cred_by_name(account: &str, password: &str) -> Result<(), String> {
     let mut m = read_creds(&creds_path())?;
     replace_credential(&mut m, account, password);
     backup::login_attempt_started(account).map_err(|e| e.message)?;
-    atomic_json(&creds_path(), &m)
+    atomic_json(&creds_path(), &m)?;
+    backup::credentials_changed().map_err(|e| e.message)
 }
 
 fn replace_credential(m: &mut std::collections::BTreeMap<String, String>, account: &str, password: &str) {
@@ -1366,7 +1368,8 @@ pub fn remove_cred_by_name(account: &str) -> Result<(), String> {
     let mut m = read_creds(&creds_path())?;
     m.retain(|k, _| !k.eq_ignore_ascii_case(account));
     backup::login_attempt_started(account).map_err(|e| e.message)?;
-    atomic_json(&creds_path(), &m)
+    atomic_json(&creds_path(), &m)?;
+    backup::credentials_changed().map_err(|e| e.message)
 }
 
 fn get_cred(account: &str) -> Option<String> {
@@ -1524,6 +1527,7 @@ fn watch_switch_login(root: String, account: String, password: String, baseline:
             let Some(acc) = confirmed_account(&account, baseline) else { continue; };
             let _steam_op = STEAM_OP.lock().unwrap();
             if STEAM_GENERATION.load(Ordering::SeqCst) != generation
+                || get_cred(&account).as_deref() != Some(password.as_str())
                 || !login_confirmed(&root, &acc.steam_id64, baseline) { return; }
             backup::confirmed_login(&account, &password, "列表登录确认");
             log("acct", "Steam 登录确认", "登录已确认，已按备份设置处理", true);
@@ -2341,7 +2345,14 @@ pub fn backup_save(config: backup::Config) -> Result<backup::Snapshot, backup::E
 pub async fn backup_test(config: backup::Config) -> Result<backup::TestReport, backup::Error> { backup::test(config).await }
 
 #[tauri::command]
-pub async fn backup_sync() -> Result<backup::Snapshot, backup::Error> { backup::sync(true).await }
+pub async fn backup_sync(account: Option<String>) -> Result<backup::Snapshot, backup::Error> {
+    backup::sync(true, account.as_deref()).await
+}
+
+#[tauri::command]
+pub fn backup_save_password(account: String, password: String) -> Result<backup::Snapshot, backup::Error> {
+    backup::save_password(&account, &password)
+}
 
 #[tauri::command]
 pub fn get_status() -> AppStatus {
@@ -2697,6 +2708,7 @@ pub async fn login_new(account: String, password: String, app: AppHandle) -> Res
                                 let include_global = load_settings().global_cover_on;
                                 let _steam_op = STEAM_OP.lock().unwrap();   // 与常规 Steam 操作串行
                                 if STEAM_GENERATION.load(Ordering::SeqCst) != generation
+                                    || get_cred(&acct).as_deref() != Some(pass.as_str())
                                     || confirmed_account(&acct, before_ts).is_none() { return; }
                                 backup::confirmed_login(&acct, &pass, "新增登录确认");
                                 let note = match cover_locked(include_global, app3.clone()) {

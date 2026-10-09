@@ -294,8 +294,8 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
 .add-row .btn{ height:32px; padding:0 14px; }   /* 与输入框同高对齐 */
 .f-row{ display:flex; flex-direction:column; gap:5px; margin-bottom:9px; }
 .f-row label{ font-size:10.5px; color:var(--txt3); letter-spacing:.08em; }
-.f-row input{ height:32px; border-radius:7px; border:1px solid var(--line); background:#0a0f18; color:var(--txt); padding:0 10px; font-size:12px; outline:none; font-family:"Cascadia Mono","Consolas",monospace; }
-.f-row input:focus{ border-color:var(--steam); box-shadow:0 0 0 2px rgba(90,162,255,.15); }
+.f-row input,.backup-password-form input{ height:32px; border-radius:7px; border:1px solid var(--line); background:#0a0f18; color:var(--txt); padding:0 10px; font-size:12px; outline:none; font-family:"Cascadia Mono","Consolas",monospace; }
+.f-row input:focus,.backup-password-form input:focus{ border-color:var(--steam); box-shadow:0 0 0 2px rgba(90,162,255,.15); }
 .f-input-row{ display:flex; gap:8px; }
 .f-input-row input{ flex:1; min-width:0; }
 .browse-btn{ flex:none; height:32px; padding:0 12px; cursor:pointer; border-radius:6px; font-size:11px; border:1px solid var(--line); background:var(--panel2); color:var(--txt2); font-family:inherit; transition:.15s; }   /* 走查：字号/圆角并入紧凑级规范 */
@@ -328,10 +328,6 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
 .backup-grid{ display:grid; grid-template-columns:minmax(0,1fr) 76px; gap:10px; }
 .backup-grid.equal{ grid-template-columns:repeat(2,minmax(0,1fr)); }
 .backup-fields input{ width:100%; min-width:0; }
-.backup-password{ position:relative; }
-.backup-password input{ padding-right:42px; }
-.backup-password .password-reveal{ position:absolute; right:7px; top:7px; border:none; background:transparent; color:var(--txt3); cursor:pointer; font-size:10px; font-family:inherit; }
-.password-reveal:hover{ color:var(--txt); }
 .backup-format{ border-top:1px solid var(--line); padding:8px 12px; display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; color:var(--txt3); }
 .backup-format code{ font-size:11px; color:var(--txt2); }
 .backup-note{ font-size:10px; line-height:1.7; color:var(--txt3); padding:0 2px; }
@@ -346,8 +342,12 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
 .backup-test-result[data-state="passed"]{ color:var(--ok); }
 .backup-test-result[data-state="failed"]{ color:var(--err); }
 .backup-preview-label{ font-size:10px; color:var(--txt3); }
-.backup-feedback{ flex:none; font-size:10.5px; color:var(--txt2); padding:0 2px; line-height:1.6; }
+.backup-feedback{ flex:none; font-size:11px; color:var(--txt2); padding:8px 10px; margin-bottom:10px; line-height:1.6; border:1px solid var(--line); border-radius:8px; overflow-wrap:anywhere; max-height:104px; overflow-y:auto; }
 .backup-feedback:empty{ display:none; }
+.backup-feedback[data-tone="success"]{ color:var(--ok); border-color:color-mix(in srgb,var(--ok) 35%,transparent); background:color-mix(in srgb,var(--ok) 8%,transparent); }
+.backup-feedback[data-tone="success"]::before{ content:'✓ '; font-weight:700; }
+.backup-feedback[data-tone="error"]{ color:var(--err); border-color:color-mix(in srgb,var(--err) 35%,transparent); background:color-mix(in srgb,var(--err) 8%,transparent); }
+.backup-feedback[data-tone="error"]::before{ content:'! '; font-weight:700; }
 .backup-queue-head{ display:flex; align-items:center; justify-content:space-between; padding:0 2px 2px; }
 .backup-queue-head .name{ font-size:12px; font-weight:600; }
 .backup-queue-head .hint{ font-size:10px; color:var(--txt3); }
@@ -356,6 +356,12 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
 .backup-account .avatar{ width:30px; height:30px; font-size:11px; border-radius:9px; }
 .backup-account .acct-name{ font-size:12px; }
 .backup-account .acct-sub{ font-size:10px; line-height:1.5; }
+.backup-account{ flex-wrap:wrap; }
+.backup-account .acct-name{ display:flex; align-items:center; flex-wrap:wrap; gap:5px; }
+.backup-account > .btn{ flex:none; }
+.backup-password-form{ flex:0 0 100%; display:flex; flex-wrap:wrap; gap:7px; border-top:1px solid var(--line); padding-top:10px; }
+.backup-password-form label{ width:100%; font-size:10px; color:var(--txt3); }
+.backup-password-form input{ flex:1; width:0; min-width:80px; }
 .backup-state{ font-size:9.5px; color:var(--warn); white-space:nowrap; border:1px solid color-mix(in srgb,var(--warn) 25%,transparent); border-radius:99px; padding:2px 7px; background:color-mix(in srgb,var(--warn) 6%,transparent); }
 .backup-empty{ padding:44px 12px; text-align:center; color:var(--txt3); font-size:11px; line-height:1.8; border:1px dashed var(--line); border-radius:10px; }
 .backup-empty svg{ width:30px; height:30px; margin-bottom:10px; color:var(--steam); opacity:.7; }
@@ -668,7 +674,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="modal-mask" id="backupMask">
     <div class="modal backup-modal" role="dialog" aria-modal="true" aria-labelledby="backupTitle" aria-describedby="backupIntro">
       <div class="modal-head"><h2 id="backupTitle">Steam 账号备份</h2><button type="button" class="x" id="closeBackup" aria-label="关闭账号备份">✕</button></div>
-      <div class="backup-intro" id="backupIntro">确认登录成功后备份到 NAS，同账号保留最新密码。</div>
+      <div class="backup-intro" id="backupIntro">登录成功后自动备份，也可手动同步已保存密码；同账号保留最新密码。</div>
       <div class="seg backup-tabs" role="tablist" aria-label="账号备份">
         <button type="button" id="backupConfigTab" class="on" role="tab" aria-selected="true" aria-controls="backupConfigPane" data-backup-tab="config">SFTP 配置</button>
         <button type="button" id="backupQueueTab" role="tab" aria-selected="false" aria-controls="backupQueuePane" tabindex="-1" data-backup-tab="queue">待同步账号<span class="tab-count" id="backupQueueCount">0</span></button>
@@ -689,7 +695,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
               </div>
               <div class="backup-grid equal">
                 <div class="f-row"><label for="backupUser">NAS 用户名</label><input id="backupUser" type="text" placeholder="请输入用户名" autocomplete="off" spellcheck="false"></div>
-                <div class="f-row"><label for="backupPassword">NAS 密码</label><div class="backup-password"><input id="backupPassword" type="password" placeholder="请输入密码" autocomplete="off"><button type="button" class="password-reveal" id="backupReveal" aria-label="显示 NAS 密码" aria-pressed="false">显示</button></div></div>
+                <div class="f-row"><label for="backupPassword">NAS 密码</label><input id="backupPassword" type="text" placeholder="请输入密码" autocomplete="off" spellcheck="false"></div>
               </div>
               <div class="f-row"><label for="backupRemotePath">远程备份文件</label><input id="backupRemotePath" type="text" placeholder="例如 /GameReady/accounts.txt" autocomplete="off" spellcheck="false"></div>
             </div>
@@ -698,15 +704,15 @@ body.preview.backup-review .window{ flex-shrink:0; }
           <div class="backup-note">配置以明文保存在 exe 同级 Data 目录，配置一次即可沿用。<br>远程目录请先在 NAS 创建，并填写 SFTP 中的实际路径。</div>
         </div>
         <div class="backup-pane" id="backupQueuePane" role="tabpanel" aria-labelledby="backupQueueTab" hidden>
-          <div class="backup-queue-head"><span class="name" id="backupPendingTitle">待同步 · 0 条</span><span class="hint" id="backupQueueHint">登录记录队列</span></div>
+          <div class="backup-queue-head"><span class="name" id="backupPendingTitle">待同步 · 0 条</span><span class="hint" id="backupQueueHint">未同步账号</span></div>
           <div class="backup-list" id="backupQueueList"></div>
-          <div class="backup-note">只上传已确认登录成功的密码；历史记录需先验证登录。<br>开启备份或立即同步时补传已验证账号；断网后自动重试。</div>
+          <div class="backup-note">有密码可直接同步；缺少密码时先补充，仅保存密码。<br>「待验证」表示密码尚未确认登录；自动备份仍需登录成功。</div>
         </div>
-        <div class="backup-feedback" id="backupFeedback" role="status" aria-live="polite"></div>
       </div>
       <div class="backup-foot">
+        <div class="backup-feedback" id="backupFeedback" role="status" aria-live="polite" aria-atomic="true"></div>
         <div class="f-actions" id="backupConfigActions"><div class="backup-test-group"><button type="button" class="btn" id="backupTest">测试连接</button><span id="backupTestLight" class="backup-test-light" data-state="untested" role="status" aria-label="当前配置尚未测试"></span><span id="backupTestResult" class="backup-test-result" data-state="untested"></span></div><button type="button" class="btn primary" id="backupSave">保存配置</button></div>
-        <div class="f-actions" id="backupQueueActions" hidden><span class="backup-preview-label" id="backupLastSync">尚未同步</span><button type="button" class="btn primary" id="backupSync">立即同步</button></div>
+        <div class="f-actions" id="backupQueueActions" hidden><span class="backup-preview-label" id="backupLastSync">尚未同步</span><button type="button" class="btn primary" id="backupSync">全部同步</button></div>
       </div>
     </div>
   </div>
@@ -1252,6 +1258,17 @@ $('doLogin').addEventListener('click', async ()=>{
 let backupReturnFocus = null;
 let backupDirty = false, backupBusy = false, backupFingerprint = '', backupSnapshot = null;
 let backupTestConfig = null;
+let backupSyncAccount = null, backupPasswordAccount = null, backupPasswordDraft = '';
+let backupResult = null;
+function renderBackupFeedback(message,tone='info'){
+  $('backupFeedback').textContent=message;
+  $('backupFeedback').dataset.tone=tone;
+}
+function setBackupFeedback(message,tone='info',pin=false){
+  // 手动操作结果一直保留到下一次操作，后台列表刷新不能覆盖它。
+  backupResult=pin?{message,tone}:null;
+  renderBackupFeedback(message,tone);
+}
 function sameBackupConnection(a,b){
   return !!a && !!b && ['host','port','username','password','remote_path'].every(key=>a[key]===b[key]);
 }
@@ -1280,71 +1297,96 @@ function updateBackupIndicator(snapshot, unavailable){
 function renderBackupQueue(rows,missing,unconfirmed){
   missing = missing || [];
   unconfirmed = unconfirmed || [];
-  $('backupQueueCount').textContent = String(rows.length+missing.length+unconfirmed.length);
-  $('backupPendingTitle').textContent = '待上传 · '+rows.length+' 条';
+  const total = rows.length+missing.length+unconfirmed.length;
+  $('backupQueueCount').textContent = String(total);
+  $('backupPendingTitle').textContent = '待同步 · '+total+' 个账号';
+  const oldInput = $('backupAccountPassword');
+  const restoreInput = oldInput && document.activeElement===oldInput;
+  const selection = restoreInput ? [oldInput.selectionStart,oldInput.selectionEnd] : null;
   const list = $('backupQueueList');
   list.replaceChildren();
-  if(!rows.length && !missing.length && !unconfirmed.length){
+  const busy = backupBusy || backupSnapshot?.status==='syncing';
+  $('backupSync').disabled = busy || !(rows.length+unconfirmed.length);
+  if(!total){
     const empty = el('div','backup-empty');
-    empty.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><div>暂无待同步账号</div><div>成功登录后才会加入上传队列</div>';
+    empty.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><div>暂无待同步账号</div><div>已同步账号无需重复上传</div>';
     list.appendChild(empty);
     return;
   }
-  rows.forEach(row=>{
+  const entries = [
+    ...rows.map(row=>({...row,status:row.login_confirmed===false?'待验证':'待同步'})),
+    ...unconfirmed.map(account=>({account,status:'待验证',source:'密码已保存，可手动同步'})),
+    ...missing.map(account=>({account,status:'待补充密码',missing:true,source:'本机尚无可用密码'}))
+  ];
+  entries.forEach(row=>{
     const card = el('div','backup-account');
+    card.dataset.account = row.account;
     card.appendChild(el('div','avatar',firstChar(row.account).toUpperCase()));
     const info = el('div','acct-info');
     const name = el('div','acct-name');
     name.appendChild(el('span','',row.account));
+    name.appendChild(el('span','backup-state',row.status));
     info.appendChild(name);
     const time = row.ts_ms ? fmtMDHM(new Date(row.ts_ms)) : row.time;
-    info.appendChild(el('div','acct-sub',row.source+' · '+(time || '待同步')));
+    info.appendChild(el('div','acct-sub',(row.source || '已保存密码')+(time?' · '+time:'')));
     card.appendChild(info);
-    card.appendChild(el('span','backup-state','待同步'));
+    const button = el('button','btn',backupBusy && backupSyncAccount===row.account?'同步中…':row.missing?'补充密码':'同步');
+    button.type='button';
+    button.disabled=busy;
+    button.addEventListener('click',()=>{
+      if(!row.missing){ backupAction('sync',row.account); return; }
+      backupPasswordAccount=row.account;
+      backupPasswordDraft='';
+      redrawBackupQueue();
+      $('backupAccountPassword')?.focus();
+    });
+    card.appendChild(button);
+    if(row.missing && backupPasswordAccount===row.account){
+      const form=el('form','backup-password-form');
+      const label=el('label','','补充 '+row.account+' 的密码');
+      label.htmlFor='backupAccountPassword';
+      const input=el('input');
+      input.id='backupAccountPassword'; input.type='text'; input.autocomplete='off'; input.spellcheck=false;
+      input.placeholder='仅保存密码'; input.value=backupPasswordDraft; input.disabled=backupBusy;
+      input.addEventListener('input',()=>backupPasswordDraft=input.value);
+      const confirm=el('button','btn primary',backupBusy?'保存中…':'确认');
+      confirm.type='submit'; confirm.disabled=busy;
+      const cancel=el('button','btn','取消');
+      cancel.type='button'; cancel.disabled=backupBusy;
+      cancel.addEventListener('click',()=>{ backupPasswordAccount=null; backupPasswordDraft=''; redrawBackupQueue(); });
+      form.append(label,input,confirm,cancel);
+      form.addEventListener('submit',e=>{ e.preventDefault(); saveBackupPassword(row.account); });
+      card.appendChild(form);
+    }
     list.appendChild(card);
   });
-  if(unconfirmed.length){
-    list.appendChild(el('div','backup-preview-label','待验证登录 · '+unconfirmed.length+' 个账号'));
-    unconfirmed.forEach(account=>{
-      const card=el('div','backup-account');
-      card.appendChild(el('div','avatar',firstChar(account).toUpperCase()));
-      const info=el('div','acct-info');
-      info.appendChild(el('div','acct-name',account));
-      info.appendChild(el('div','acct-sub','密码尚未确认登录成功，暂不上传'));
-      card.appendChild(info);
-      const button=el('button','btn','验证登录');
-      button.type='button';
-      button.addEventListener('click',()=>{
-        const local=(state.accounts || []).find(a=>a.account_name.toLowerCase()===account.toLowerCase());
-        closeBackup();
-        if(local){ doSwitch(local); }
-        else { $('fUser').value=account; $('fPass').value=''; $('fPass').focus(); toast('请补输密码并完成登录后再备份'); }
-      });
-      card.appendChild(button);
-      list.appendChild(card);
-    });
+  if(restoreInput && $('backupAccountPassword')){
+    $('backupAccountPassword').focus();
+    $('backupAccountPassword').setSelectionRange(...selection);
   }
-  if(missing.length){
-    list.appendChild(el('div','backup-preview-label','待补密码 · '+missing.length+' 个账号'));
-    missing.forEach(account=>{
-      const card = el('div','backup-account');
-      card.appendChild(el('div','avatar',firstChar(account).toUpperCase()));
-      const info = el('div','acct-info');
-      info.appendChild(el('div','acct-name',account));
-      info.appendChild(el('div','acct-sub','本机无可用密码，暂不能上传'));
-      card.appendChild(info);
-      const button = el('button','btn','补密码');
-      button.type='button';
-      button.addEventListener('click',()=>{
-        closeBackup();
-        $('fUser').value=account;
-        $('fPass').value='';
-        $('fPass').focus();
-      });
-      card.appendChild(button);
-      list.appendChild(card);
-    });
-  }
+}
+function redrawBackupQueue(){
+  const s=backupSnapshot || {};
+  renderBackupQueue(s.queue || [],s.missing_password_accounts || [],s.unconfirmed_password_accounts || []);
+}
+async function saveBackupPassword(account){
+  if(backupBusy) return;
+  if(!hasTauri){ setBackupFeedback(NO_TAURI_MSG,'error'); return; }
+  const password=backupPasswordDraft;
+  if(!password){ setBackupFeedback('请输入密码','error'); $('backupAccountPassword')?.focus(); return; }
+  backupBusy=true;
+  setBackupFeedback('正在保存密码…');
+  redrawBackupQueue();
+  try{
+    const snapshot=await invoke('backup_save_password',{account,password});
+    backupPasswordAccount=null; backupPasswordDraft='';
+    applyBackup(snapshot,false);
+    setBackupFeedback(account+'：密码已补充，可点击同步','success',true);
+    toast(account+'：密码已补充','ok');
+  }catch(e){
+    await refreshBackup(false);
+    setBackupFeedback(errText(e),'error',true);
+  }finally{ backupBusy=false; redrawBackupQueue(); }
 }
 function showBackupTab(name, focus){
   const config = name === 'config';
@@ -1370,14 +1412,18 @@ function backupConfig(){
 }
 function applyBackup(snapshot, fill){
   if(!snapshot) return;
+  // 较慢的查询响应不能覆盖刚收到的同步完成/补密码事件。
+  if((snapshot.state_version ?? 0)<(backupSnapshot?.state_version ?? 0)) return;
   backupSnapshot = snapshot;
   updateBackupIndicator(snapshot);
   renderBackupQueue(snapshot.queue || [],snapshot.missing_password_accounts || [],snapshot.unconfirmed_password_accounts || []);
   const success = snapshot.last_success_ms;
   $('backupLastSync').textContent = success ? '上次 '+fmtMDHM(new Date(success)) : '尚未同步';
-  $('backupFeedback').textContent = snapshot.message || '';
-  if(snapshot.inventory_error) $('backupFeedback').textContent += '；'+snapshot.inventory_error;
-  if(snapshot.next_retry_ms > Date.now()) $('backupFeedback').textContent += '（下次 '+fmtHM(new Date(snapshot.next_retry_ms))+' 重试）';
+  let message = snapshot.message || '';
+  if(snapshot.inventory_error) message += '；'+snapshot.inventory_error;
+  if(snapshot.next_retry_ms > Date.now()) message += '（下次 '+fmtHM(new Date(snapshot.next_retry_ms))+' 重试）';
+  if(backupResult) renderBackupFeedback(backupResult.message,backupResult.tone);
+  else renderBackupFeedback(message);
   if(fill){
     const c=snapshot.config || {};
     $('backupHost').value=c.host || '';
@@ -1398,23 +1444,25 @@ function applyBackup(snapshot, fill){
 async function refreshBackup(fill){
   if(!hasTauri) return;
   try{ applyBackup(await invoke('backup_get'),!!fill && !backupDirty); }
-  catch(e){ $('backupFeedback').textContent=errText(e); updateBackupIndicator(backupSnapshot,true); }
+  catch(e){ setBackupFeedback(errText(e),'error'); updateBackupIndicator(backupSnapshot,true); }
 }
-async function backupAction(action){
+async function backupAction(action,account=null){
   if(backupBusy) return;
-  if(!hasTauri){ $('backupFeedback').textContent='浏览器仅预览界面，请在 GameReady 中配置和同步'; return; }
-  if(action==='sync' && backupDirty){ $('backupFeedback').textContent='配置已修改，请先保存配置'; return; }
+  if(!hasTauri){ setBackupFeedback('浏览器仅预览界面，请在 GameReady 中配置和同步'); return; }
+  if(action==='sync' && backupDirty){ setBackupFeedback('配置已修改，请先保存配置','error'); return; }
   const config=backupConfig();
   if(action!=='sync' && (!Number.isInteger(config.port) || config.port<1 || config.port>65535)){
-    $('backupFeedback').textContent='端口必须为 1–65535 的整数'; return;
+    setBackupFeedback('端口必须为 1–65535 的整数','error'); return;
   }
   const id=action==='test'?'backupTest':action==='save'?'backupSave':'backupSync';
   const button=$(id), original=button.textContent;
   backupBusy=true;
+  backupSyncAccount=action==='sync'?account:null;
+  redrawBackupQueue();
   ['backupTest','backupSave','backupSync'].forEach(n=>$(n).disabled=true);
   ['backupHost','backupPort','backupUser','backupPassword','backupRemotePath','backupEnabled'].forEach(n=>$(n).disabled=true);
-  button.innerHTML='<span class="spin-sm"></span> '+(action==='test'?'测试中…':action==='save'?'保存中…':'同步中…');
-  $('backupFeedback').textContent=action==='test'?'正在验证 SFTP 登录和目标目录读写…':action==='save'?'正在保存配置…':'正在合并远程账号文件…';
+  if(!account) button.innerHTML='<span class="spin-sm"></span> '+(action==='test'?'测试中…':action==='save'?'保存中…':'同步中…');
+  setBackupFeedback(action==='test'?'正在验证 SFTP 登录和目标目录读写…':action==='save'?'正在保存配置…':'正在合并远程账号文件…');
   if(action==='test'){ backupTestConfig=null; setBackupTestStatus('testing'); }
   try{
     if(action==='test'){
@@ -1422,22 +1470,29 @@ async function backupAction(action){
       if(config.host===backupConfig().host && config.port===backupConfig().port) backupFingerprint=report.fingerprint;
       backupTestConfig=config;
       setBackupTestStatus('passed');
-      $('backupFeedback').textContent=report.message+'；保存配置后生效';
+      setBackupFeedback(report.message+'；保存配置后生效','success',true);
     }else if(action==='save'){
       const snapshot=await invoke('backup_save',{config});
       applyBackup(snapshot,true);
     }else{
-      applyBackup(await invoke('backup_sync'),false);
+      const snapshot=await invoke('backup_sync',{account});
+      applyBackup(snapshot,false);
+      setBackupFeedback(snapshot.message,'success',true);
+      toast(snapshot.message,'ok');
     }
   }catch(e){
-    $('backupFeedback').textContent=errText(e);
+    if(action==='sync') await refreshBackup(false);
+    setBackupFeedback((action==='sync'?(account?account+'：同步失败，':'全部同步失败，'):'')+errText(e),'error',true);
+    if(action==='sync') toast((account?account+'：':'')+errText(e),'err');
     if(action==='test'){ backupTestConfig=null; setBackupTestStatus('failed'); }
   }
   finally{
     backupBusy=false;
+    backupSyncAccount=null;
     ['backupTest','backupSave','backupSync'].forEach(n=>$(n).disabled=false);
     ['backupHost','backupPort','backupUser','backupPassword','backupRemotePath','backupEnabled'].forEach(n=>$(n).disabled=false);
     button.textContent=original;
+    redrawBackupQueue();
   }
 }
 function openBackup(){
@@ -1449,10 +1504,9 @@ function openBackup(){
 }
 function closeBackup(){
   $('backupMask').classList.remove('show');
-  $('backupPassword').type = 'password';
-  $('backupReveal').textContent = '显示';
-  $('backupReveal').setAttribute('aria-label','显示 NAS 密码');
-  $('backupReveal').setAttribute('aria-pressed','false');
+  backupResult=null;
+  backupPasswordAccount=null; backupPasswordDraft='';
+  redrawBackupQueue();
   if(backupReturnFocus) backupReturnFocus.focus();
 }
 $('openBackup').addEventListener('click',openBackup);
@@ -1473,22 +1527,16 @@ $('backupEnabled').addEventListener('click',function(){
   this.setAttribute('aria-checked',String(enabled));
   this.classList.toggle('on',enabled);
   backupDirty=true;
-  $('backupFeedback').textContent = '开关已修改，保存配置后生效';
+  setBackupFeedback('开关已修改，保存配置后生效');
 });
 ['backupHost','backupPort','backupUser','backupPassword','backupRemotePath'].forEach(id=>{
   $(id).addEventListener('input',()=>{
     backupDirty=true;
+    setBackupFeedback('配置已修改，请保存配置后同步');
     backupTestConfig=null;
     setBackupTestStatus('untested');
     if(id==='backupHost'||id==='backupPort') backupFingerprint='';
   });
-});
-$('backupReveal').addEventListener('click',function(){
-  const reveal = $('backupPassword').type === 'password';
-  $('backupPassword').type = reveal ? 'text' : 'password';
-  this.textContent = reveal ? '隐藏' : '显示';
-  this.setAttribute('aria-label',reveal ? '隐藏 NAS 密码' : '显示 NAS 密码');
-  this.setAttribute('aria-pressed',String(reveal));
 });
 $('backupTest').addEventListener('click',()=>backupAction('test'));
 $('backupSave').addEventListener('click',()=>backupAction('save'));

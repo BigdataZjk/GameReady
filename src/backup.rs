@@ -61,6 +61,8 @@ struct Pending {
     password: String,
     source: String,
     ts_ms: i64,
+    #[serde(default)]
+    manual: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -70,7 +72,9 @@ struct Store {
     verified: bool,
     credentials_seeded: bool,
     confirmed_credentials: BTreeMap<String, String>,
+    synced_credentials: BTreeMap<String, String>,
     revision: u64,
+    state_version: u64,
     client_id: String,
     queue: Vec<Pending>,
     status: String,
@@ -83,7 +87,7 @@ struct Store {
 
 impl Default for Store {
     fn default() -> Self {
-        Self { config: Config::default(), verified: false, credentials_seeded: false, confirmed_credentials: BTreeMap::new(), revision: 0, client_id: Uuid::new_v4().to_string(),
+        Self { config: Config::default(), verified: false, credentials_seeded: false, confirmed_credentials: BTreeMap::new(), synced_credentials: BTreeMap::new(), revision: 0, state_version: 0, client_id: Uuid::new_v4().to_string(),
             queue: Vec::new(), status: "disabled".into(), message: "自动备份未开启".into(),
             last_success_ms: None, failures: 0, blocked: false, next_retry_ms: 0 }
     }
@@ -94,10 +98,12 @@ pub struct QueueItem {
     pub account: String,
     pub source: String,
     pub ts_ms: i64,
+    pub login_confirmed: bool,
 }
 
 #[derive(Clone, Serialize)]
 pub struct Snapshot {
+    pub state_version: u64,
     pub config: Config,
     pub config_verified: bool,
     pub missing_password_accounts: Vec<String>,
@@ -112,27 +118,48 @@ pub struct Snapshot {
 
 impl Store {
     fn snapshot(&self) -> Snapshot {
-        let (missing_password_accounts, unconfirmed_password_accounts, inventory_error) = match inventory(&self.confirmed_credentials) {
-            Ok(inventory) => (inventory.missing, inventory.unconfirmed, None),
+        self.snapshot_from_inventory(inventory(&self.confirmed_credentials))
+    }
+
+    fn snapshot_from_inventory(&self, inventory: Result<Inventory>) -> Snapshot {
+        let mut queue: Vec<_> = self.queue.iter().filter(|p| upload_allowed(self, p)).map(|p| QueueItem {
+            account: p.account.clone(), source: p.source.clone(), ts_ms: p.ts_ms,
+            login_confirmed: credential_confirmed(&self.confirmed_credentials, &p.account, &p.password),
+        }).collect();
+        let (missing_password_accounts, unconfirmed_password_accounts, inventory_error) = match inventory {
+            Ok(inventory) => {
+                let mut unconfirmed = Vec::new();
+                for (account, password) in &inventory.available {
+                    if credential_confirmed(&self.synced_credentials, account, password)
+                        || queue.iter().any(|p| p.account.eq_ignore_ascii_case(account)) { continue; }
+                    if credential_confirmed(&self.confirmed_credentials, account, password) {
+                        queue.push(QueueItem { account: account.clone(), source: "已确认登录".into(), ts_ms: 0, login_confirmed: true });
+                    } else { unconfirmed.push(account.clone()); }
+                }
+                let missing = inventory.missing.into_iter()
+                    .filter(|a| !queue.iter().any(|p| p.account.eq_ignore_ascii_case(a))).collect();
+                (missing, unconfirmed, None)
+            }
             Err(e) => (Vec::new(), Vec::new(), Some(e.message)),
         };
-        Snapshot { config: self.config.clone(), config_verified: self.verified && validate_config(&self.config).is_ok(),
+        Snapshot { state_version: self.state_version, config: self.config.clone(), config_verified: self.verified && validate_config(&self.config).is_ok(),
             missing_password_accounts, unconfirmed_password_accounts, inventory_error,
-            queue: self.queue.iter().filter(|p| credential_confirmed(&self.confirmed_credentials, &p.account, &p.password)).map(|p| QueueItem {
-                account: p.account.clone(), source: p.source.clone(), ts_ms: p.ts_ms,
-            }).collect(), status: self.status.clone(), message: self.message.clone(),
+            queue, status: self.status.clone(), message: self.message.clone(),
             last_success_ms: self.last_success_ms, next_retry_ms: self.next_retry_ms }
     }
 
     fn enqueue(&mut self, account: &str, password: &str, source: &str) {
         self.queue.retain(|p| !p.account.eq_ignore_ascii_case(account));
         self.queue.push(Pending { id: Uuid::new_v4().to_string(), account: account.into(),
-            password: password.into(), source: source.into(), ts_ms: now() });
+            password: password.into(), source: source.into(), ts_ms: now(), manual: false });
     }
 
     fn acknowledge(&mut self, sent: &[Pending]) {
         // 上传期间收到的同账号新密码具有新 id，不能被旧批次清掉。
         self.queue.retain(|p| !sent.iter().any(|s| s.id == p.id));
+        for p in sent {
+            self.synced_credentials.insert(p.account.trim().to_ascii_lowercase(), credential_digest(&p.account, &p.password));
+        }
     }
 
     fn confirm_success(&mut self, account: &str, password: &str, source: &str) -> Result<()> {
@@ -140,7 +167,7 @@ impl Store {
             return Err(error("format_error", "账号或密码为空或含换行，未加入备份队列", false));
         }
         self.confirmed_credentials.insert(account.trim().to_ascii_lowercase(), credential_digest(account, password));
-        if self.config.enabled {
+        if self.config.enabled && !credential_confirmed(&self.synced_credentials, account, password) {
             self.enqueue(account.trim(), password, source);
             if !self.blocked && self.status != "syncing" {
                 self.status = "pending".into();
@@ -202,6 +229,7 @@ fn edit<T>(f: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
     let path = crate::data_dir().join("backup.json");
     let mut store = read_store(&path)?;
     store.client_id = CLIENT_ID.clone();
+    store.state_version = store.state_version.saturating_add(1);
     let value = f(&mut store)?;
     write_store(&path, &store)?;
     publish(&store);
@@ -225,6 +253,8 @@ fn publish(store: &Store) {
 }
 
 pub fn get() -> Result<Snapshot> { Ok(load()?.snapshot()) }
+
+pub fn credentials_changed() -> Result<()> { edit(|_| Ok(())) }
 
 fn same_connection(a: &Config, b: &Config) -> bool {
     a.host == b.host && a.port == b.port && a.username == b.username
@@ -251,7 +281,6 @@ pub fn save(mut config: Config) -> Result<Snapshot> {
     config.username = config.username.trim().to_string();
     config.remote_path = config.remote_path.trim().to_string();
     if config.enabled { validate_config(&config)?; }
-    let inventory = if config.enabled { Some(inventory(&load()?.confirmed_credentials)?) } else { None };
     let tested = TESTED_CONFIG.lock().unwrap_or_else(|p| p.into_inner()).take();
     let snapshot = edit(|s| {
         // 同一服务器已经记录的密钥不能被空值或旧的前端快照清掉。
@@ -264,8 +293,13 @@ pub fn save(mut config: Config) -> Result<Snapshot> {
         }
         s.verified = (s.verified && same_connection(&s.config, &config))
             || tested.as_ref().is_some_and(|c| same_connection(c, &config));
+        if !same_connection(&s.config, &config) {
+            s.synced_credentials.clear();
+            s.credentials_seeded = false;
+        }
         s.config = config;
         prune_unconfirmed(s);
+        let inventory = if s.config.enabled { Some(inventory(&s.confirmed_credentials)?) } else { None };
         if let Some(inventory) = &inventory {
             seed_inventory(s, inventory, "历史账号补传");
         }
@@ -289,6 +323,7 @@ fn valid_credential(account: &str, password: &str) -> bool {
 }
 
 struct Inventory {
+    available: Vec<(String, String)>,
     credentials: Vec<(String, String)>,
     missing: Vec<String>,
     unconfirmed: Vec<String>,
@@ -307,7 +342,14 @@ fn credential_confirmed(confirmed: &BTreeMap<String, String>, account: &str, pas
 }
 
 fn prune_unconfirmed(store: &mut Store) {
-    store.queue.retain(|p| credential_confirmed(&store.confirmed_credentials, &p.account, &p.password));
+    let confirmed = &store.confirmed_credentials;
+    store.queue.retain(|p| valid_credential(&p.account, &p.password)
+        && (p.manual || credential_confirmed(confirmed, &p.account, &p.password)));
+}
+
+fn upload_allowed(store: &Store, pending: &Pending) -> bool {
+    valid_credential(&pending.account, &pending.password)
+        && (pending.manual || credential_confirmed(&store.confirmed_credentials, &pending.account, &pending.password))
 }
 
 pub fn is_login_confirmed(account: &str, password: &str) -> bool {
@@ -340,12 +382,15 @@ fn classify_inventory(creds: &BTreeMap<String, String>, history: &[String], conf
     for account in history {
         grouped.entry(account.trim().to_ascii_lowercase()).or_default();
     }
-    let mut inventory = Inventory { credentials: Vec::new(), missing: Vec::new(), unconfirmed: Vec::new() };
+    let mut inventory = Inventory { available: Vec::new(), credentials: Vec::new(), missing: Vec::new(), unconfirmed: Vec::new() };
     for (account, password) in grouped {
         if account.is_empty() { continue; }
         match password {
-            Some(password) if credential_confirmed(confirmed, &account, &password) => inventory.credentials.push((account, password)),
-            Some(_) => inventory.unconfirmed.push(account),
+            Some(password) => {
+                inventory.available.push((account.clone(), password.clone()));
+                if credential_confirmed(confirmed, &account, &password) { inventory.credentials.push((account, password)); }
+                else { inventory.unconfirmed.push(account); }
+            }
             None => inventory.missing.push(account),
         }
     }
@@ -363,11 +408,50 @@ fn seed_inventory(store: &mut Store, inventory: &Inventory, source: &str) {
     for (account, password) in &inventory.credentials {
         // 已有在途队列可能比历史文件更新，补传不能覆盖它。
         if credential_confirmed(&store.confirmed_credentials, account, password)
+            && !credential_confirmed(&store.synced_credentials, account, password)
             && !store.queue.iter().any(|p| p.account.eq_ignore_ascii_case(account)) {
             store.enqueue(account, password, source);
         }
     }
     store.credentials_seeded = true;
+}
+
+// 手动上传明确选择的本地密码，不创建 Steam 登录成功证明。
+fn prepare_manual(store: &mut Store, inventory: &Inventory, target: Option<&str>) -> Result<()> {
+    if let Some(account) = target {
+        if !inventory.available.iter().any(|(a, _)| a.eq_ignore_ascii_case(account))
+            && !store.queue.iter().any(|p| p.account.eq_ignore_ascii_case(account)) {
+            return Err(error("missing_password", "该账号没有可用密码，请先补充密码", false));
+        }
+    }
+    for (account, password) in &inventory.available {
+        if target.is_some_and(|a| !a.eq_ignore_ascii_case(account))
+            || credential_confirmed(&store.synced_credentials, account, password) { continue; }
+        if !store.queue.iter().any(|p| p.account.eq_ignore_ascii_case(account)) {
+            store.enqueue(account, password, "手动同步");
+        }
+    }
+    for pending in &mut store.queue {
+        if target.is_none_or(|a| a.eq_ignore_ascii_case(&pending.account)) { pending.manual = true; }
+    }
+    Ok(())
+}
+
+pub fn save_password(account: &str, password: &str) -> Result<Snapshot> {
+    let account = account.trim();
+    if !valid_credential(account, password) {
+        return Err(error("format_error", "请输入有效账号和密码，不能含换行或 NUL", false));
+    }
+    // 不等待正在进行的登录，也不启动、关闭或切换 Steam。
+    let _steam_op = crate::STEAM_OP.try_lock()
+        .map_err(|_| error("busy", "Steam 账号操作进行中，请完成后补充密码", false))?;
+    crate::save_cred_by_name(account, password).map_err(|e| error("local_error", &e, false))?;
+    let snapshot = edit(|s| {
+        s.message = format!("{account}：密码已补充，可点击同步");
+        Ok(s.snapshot())
+    })?;
+    if let Some(app) = APP.get() { let _ = app.emit("steam-accounts-changed", ()); }
+    Ok(snapshot)
 }
 
 pub fn confirmed_login(account: &str, password: &str, source: &str) {
@@ -387,7 +471,7 @@ pub fn missing_password() {
             if s.config.enabled { s.message = "该账号缺少本地密码，未加入上传队列；请在待同步页补输密码".into(); }
             Ok(())
         });
-        crate::log("acct", "Steam 账号未备份", "本机没有保存该账号密码，请在新增登录栏补输一次", false);
+        crate::log("acct", "Steam 账号未备份", "本机没有保存该账号密码，请在待同步页补充密码", false);
     }
 }
 
@@ -732,28 +816,41 @@ pub async fn test(mut config: Config) -> Result<TestReport> {
     }
 }
 
-pub async fn sync(force: bool) -> Result<Snapshot> {
+pub async fn sync(force: bool, account: Option<&str>) -> Result<Snapshot> {
     let _guard = SYNC_LOCK.lock().await;
     let mut store = load()?;
-    if !store.config.enabled {
-        if force { return Err(error("disabled", "请先开启自动备份并保存配置", false)); }
-        return Ok(store.snapshot());
-    }
-    // 旧版本队列没有认证记录，任何入口都不能将它直接发送到 NAS。
-    if store.queue.iter().any(|p| !credential_confirmed(&store.confirmed_credentials, &p.account, &p.password)) {
+    if !force && !store.config.enabled { return Ok(store.snapshot()); }
+    // 旧队列仍需登录证明；只有用户明确手动同步的记录可绕过此自动备份前提。
+    if store.queue.iter().any(|p| !upload_allowed(&store, p)) {
         edit(|s| { prune_unconfirmed(s); Ok(()) })?;
         store = load()?;
     }
+    let mut missing_count = 0;
     if force || !store.credentials_seeded {
-        let inventory = inventory(&store.confirmed_credentials)?;
         edit(|s| {
-            if s.config.enabled && s.revision == store.revision {
+            let inventory = inventory(&s.confirmed_credentials)?;
+            missing_count = inventory.missing.len();
+            if force {
+                validate_config(&s.config)?;
+                prepare_manual(s, &inventory, account)?;
+            } else if s.config.enabled {
                 seed_inventory(s, &inventory, "历史账号补传");
             }
             Ok(())
         })?;
         store = load()?;
-        if !store.config.enabled { return Ok(store.snapshot()); }
+        if !force && !store.config.enabled { return Ok(store.snapshot()); }
+    }
+    if force {
+        store.queue.retain(|p| account.is_none_or(|a| p.account.eq_ignore_ascii_case(a)));
+        if store.queue.is_empty() {
+            return edit(|s| {
+                s.message = if account.is_some() { "该账号已同步，无需重复上传".into() }
+                    else if missing_count > 0 { format!("暂无可同步账号，{missing_count} 个账号待补充密码") }
+                    else { "所有账号均已同步".into() };
+                Ok(s.snapshot())
+            });
+        }
     }
     if !force && (store.queue.is_empty() || store.blocked || now() < store.next_retry_ms) { return Ok(store.snapshot()); }
     validate_config(&store.config)?;
@@ -787,7 +884,13 @@ pub async fn sync(force: bool) -> Result<Snapshot> {
                 s.last_success_ms = Some(now());
                 s.failures = 0; s.blocked = false; s.next_retry_ms = 0;
                 s.status = if s.queue.is_empty() { "idle" } else { "pending" }.into();
-                s.message = format!("已同步 {} 个账号，远程重复账号已合并", store.queue.len());
+                s.message = match account {
+                    Some(account) => format!("{account}：同步成功"),
+                    None => format!("同步成功：已同步 {} 个账号，远程重复账号已合并", store.queue.len()),
+                };
+                if force && account.is_none() && missing_count > 0 {
+                    s.message.push_str(&format!("；{missing_count} 个账号待补充密码"));
+                }
                 if !s.queue.is_empty() { WAKE.notify_one(); }
             }
             Err(e) => {
@@ -800,7 +903,7 @@ pub async fn sync(force: bool) -> Result<Snapshot> {
         }
         Ok(s.snapshot())
     })?;
-    if obsolete { return Ok(snapshot); }
+    if obsolete { return Err(error("config_changed", "同步期间配置已改变，请按当前配置重新同步", false)); }
     match result {
         Ok(()) => { crate::log("acct", "Steam 账号备份完成", "NAS 账号文件已合并并读回确认；密码不写入日志", true); Ok(snapshot) }
         Err(e) => {
@@ -814,7 +917,7 @@ pub fn start(app: tauri::AppHandle) {
     let _ = APP.set(app);
     tauri::async_runtime::spawn(async {
         loop {
-            let _ = sync(false).await;
+            let _ = sync(false, None).await;
             tokio::select! { _ = WAKE.notified() => (), _ = tokio::time::sleep(Duration::from_secs(15)) => () }
         }
     });
@@ -899,8 +1002,10 @@ mod tests {
 
     #[test]
     fn historical_seed_does_not_replace_newer_queued_passwords() {
-        let inventory = Inventory { credentials: vec![("player".into(), "historical".into()),
-            ("other".into(), "saved".into())], missing: vec!["unknown".into()], unconfirmed: Vec::new() };
+        let inventory = classify_inventory(&BTreeMap::from([("player".into(), "historical".into()),
+            ("other".into(), "saved".into())]), &["unknown".into()],
+            &BTreeMap::from([("player".into(), credential_digest("player", "historical")),
+                ("other".into(), credential_digest("other", "saved"))]));
         let mut store = Store::default();
         store.confirmed_credentials.insert("player".into(), credential_digest("player", "newer"));
         store.confirmed_credentials.insert("other".into(), credential_digest("other", "saved"));
@@ -978,5 +1083,105 @@ mod tests {
         store.config.enabled = true;
         seed_inventory(&mut store, &inventory, "历史补传");
         assert_eq!(store.queue.len(), 1);
+    }
+
+    #[test]
+    fn password_only_moves_missing_to_unconfirmed_without_auto_upload() {
+        let mut store = Store::default();
+        store.config.enabled = true;
+        let history = vec!["player".into()];
+        let before = store.snapshot_from_inventory(Ok(classify_inventory(&BTreeMap::new(), &history, &store.confirmed_credentials)));
+        assert_eq!(before.missing_password_accounts, history);
+        let creds = BTreeMap::from([("player".into(), " new password ---- ".into())]);
+        let inventory = classify_inventory(&creds, &history, &store.confirmed_credentials);
+        seed_inventory(&mut store, &inventory, "自动补传");
+        assert!(store.queue.is_empty());
+        let after = store.snapshot_from_inventory(Ok(inventory));
+        assert!(after.missing_password_accounts.is_empty());
+        assert_eq!(after.unconfirmed_password_accounts, history);
+        assert!(store.confirmed_credentials.is_empty());
+    }
+
+    #[test]
+    fn manual_single_upload_is_scoped_and_does_not_confirm_login() {
+        let mut store = Store::default();
+        let creds = BTreeMap::from([("player".into(), " first ".into()), ("other".into(), "second".into())]);
+        let inventory = classify_inventory(&creds, &[], &store.confirmed_credentials);
+        prepare_manual(&mut store, &inventory, Some("PLAYER")).unwrap();
+        prune_unconfirmed(&mut store);
+        assert_eq!(store.queue.len(), 1);
+        assert_eq!(store.queue[0].account, "player");
+        assert!(upload_allowed(&store, &store.queue[0]));
+        assert!(store.confirmed_credentials.is_empty());
+        let snapshot = store.snapshot_from_inventory(Ok(classify_inventory(&creds, &[], &store.confirmed_credentials)));
+        assert_eq!(snapshot.queue.len(), 1);
+        assert!(!snapshot.queue[0].login_confirmed);
+        assert_eq!(snapshot.unconfirmed_password_accounts, vec!["other"]);
+        let batch = store.queue.clone();
+        store.acknowledge(&batch);
+        prepare_manual(&mut store, &inventory, Some("PLAYER")).unwrap();
+        assert!(store.queue.is_empty());
+        assert!(prepare_manual(&mut store, &inventory, Some("missing")).is_err());
+    }
+
+    #[test]
+    fn sync_all_skips_synced_passwords_and_keeps_missing_accounts_visible() {
+        let mut store = Store::default();
+        store.synced_credentials.insert("done".into(), credential_digest("done", "same"));
+        let creds = BTreeMap::from([("done".into(), "same".into()), ("player".into(), "new".into())]);
+        let history = vec!["missing".into()];
+        let inventory = classify_inventory(&creds, &history, &store.confirmed_credentials);
+        prepare_manual(&mut store, &inventory, None).unwrap();
+        assert_eq!(store.queue.len(), 1);
+        let sent = store.queue.clone();
+        store.acknowledge(&sent);
+        let snapshot = store.snapshot_from_inventory(Ok(classify_inventory(&creds, &history, &store.confirmed_credentials)));
+        assert!(snapshot.queue.is_empty() && snapshot.unconfirmed_password_accounts.is_empty());
+        assert_eq!(snapshot.missing_password_accounts, history);
+        prepare_manual(&mut store, &inventory, None).unwrap();
+        assert!(store.queue.is_empty());
+        let changed = BTreeMap::from([("player".into(), "changed".into())]);
+        prepare_manual(&mut store, &classify_inventory(&changed, &[], &BTreeMap::new()), None).unwrap();
+        assert_eq!(store.queue[0].password, "changed");
+    }
+
+    #[test]
+    fn confirmed_login_auto_queues_once_and_old_ack_does_not_hide_new_password() {
+        let mut store = Store::default();
+        store.config.enabled = true;
+        store.confirm_success("player", "first", "列表登录").unwrap();
+        let sent = store.queue.clone();
+        store.confirm_success("player", "second", "新增登录确认").unwrap();
+        store.acknowledge(&sent);
+        assert_eq!(store.queue.len(), 1);
+        assert_eq!(store.queue[0].password, "second");
+        let sent = store.queue.clone();
+        store.acknowledge(&sent);
+        store.confirm_success("player", "second", "晚到确认").unwrap();
+        assert!(store.queue.is_empty());
+        let creds = BTreeMap::from([("player".into(), "second".into())]);
+        let inventory = classify_inventory(&creds, &[], &store.confirmed_credentials);
+        seed_inventory(&mut store, &inventory, "历史补传");
+        assert!(store.queue.is_empty());
+        // 换一个 NAS 目标时，原目标的同步记录不能用于跳过上传。
+        store.synced_credentials.clear();
+        seed_inventory(&mut store, &inventory, "新目标补传");
+        assert_eq!(store.queue.len(), 1);
+    }
+
+    #[test]
+    fn manual_retry_and_sync_receipts_survive_restart() {
+        let mut store = Store::default();
+        let creds = BTreeMap::from([("player".into(), "saved".into())]);
+        let inventory = classify_inventory(&creds, &[], &store.confirmed_credentials);
+        prepare_manual(&mut store, &inventory, None).unwrap();
+        let mut restored: Store = serde_json::from_slice(&serde_json::to_vec(&store).unwrap()).unwrap();
+        prune_unconfirmed(&mut restored);
+        assert_eq!(restored.queue.len(), 1);
+        let sent = restored.queue.clone();
+        restored.acknowledge(&sent);
+        let mut restored: Store = serde_json::from_slice(&serde_json::to_vec(&restored).unwrap()).unwrap();
+        prepare_manual(&mut restored, &inventory, None).unwrap();
+        assert!(restored.queue.is_empty());
     }
 }
