@@ -2,6 +2,7 @@
 /target
 /gen
 /gameready.exe
+/release
 
 # 运行时数据（便携模式：exe 同级生成，随文件夹迁移，不入库）
 /Data

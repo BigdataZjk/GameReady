@@ -301,6 +301,67 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
 .browse-btn{ flex:none; height:32px; padding:0 12px; cursor:pointer; border-radius:6px; font-size:11px; border:1px solid var(--line); background:var(--panel2); color:var(--txt2); font-family:inherit; transition:.15s; }   /* 走查：字号/圆角并入紧凑级规范 */
 .browse-btn:hover{ color:var(--txt); border-color:#2c3a50; }
 .f-actions{ display:flex; gap:8px; justify-content:flex-end; }
+/* ---- Steam 账号备份模态：复用现有输入框、按钮、分组与账号卡片 ---- */
+.ap-head .backup-entry{ margin-left:auto; display:inline-flex; align-items:center; gap:4px; font-family:inherit; background:transparent; }
+.backup-entry svg{ width:11px; height:11px; }
+.backup-entry .backup-indicator{ width:12px; height:12px; margin-left:3px; flex:none; color:var(--txt3); }
+.backup-indicator[data-state="ready"]{ color:var(--ok); }
+.backup-indicator[data-state="warning"]{ color:var(--warn); }
+.backup-entry[data-tip-pos="b"]:hover::after{ left:auto; right:0; transform:none; }
+.backup-modal{ width:396px; height:552px; max-width:calc(100% - 32px); max-height:calc(100% - 64px); }
+.backup-modal [hidden]{ display:none !important; }
+.backup-modal .modal-head{ padding-bottom:6px; }
+.backup-modal .x{ border:none; background:transparent; font-family:inherit; font-size:12px; }
+.backup-intro{ padding:0 18px 12px; font-size:10.5px; line-height:1.6; color:var(--txt3); }
+.backup-tabs{ margin:0 14px 12px; flex:none; }
+.backup-tabs button{ flex:1; padding:8px 12px; }
+.backup-tabs .tab-count{ margin-left:5px; font-size:10px; opacity:.8; }
+.backup-modal .modal-body{ flex:1; min-height:0; padding-bottom:12px; }
+.backup-pane{ display:none; flex:none; flex-direction:column; gap:10px; min-height:0; }
+.backup-pane.show{ display:flex; }
+.backup-switch-row{ padding:10px 12px; min-height:58px; }
+.backup-switch-row .name{ font-size:12px; }
+.backup-switch-row .desc{ font-size:10px; }
+.backup-switch-row .toggle{ flex:none; padding:0; }
+.backup-fields{ padding:12px 12px 2px; }
+.backup-fields .f-row{ margin-bottom:10px; min-width:0; }
+.backup-grid{ display:grid; grid-template-columns:minmax(0,1fr) 76px; gap:10px; }
+.backup-grid.equal{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+.backup-fields input{ width:100%; min-width:0; }
+.backup-password{ position:relative; }
+.backup-password input{ padding-right:42px; }
+.backup-password .password-reveal{ position:absolute; right:7px; top:7px; border:none; background:transparent; color:var(--txt3); cursor:pointer; font-size:10px; font-family:inherit; }
+.password-reveal:hover{ color:var(--txt); }
+.backup-format{ border-top:1px solid var(--line); padding:8px 12px; display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; color:var(--txt3); }
+.backup-format code{ font-size:11px; color:var(--txt2); }
+.backup-note{ font-size:10px; line-height:1.7; color:var(--txt3); padding:0 2px; }
+.backup-foot{ flex:none; padding:11px 14px 12px; border-top:1px solid var(--line); background:var(--panel2); }
+.backup-foot .f-actions{ justify-content:space-between; align-items:center; }
+.backup-test-group{ display:flex; align-items:center; gap:7px; }
+.backup-test-light{ width:8px; height:8px; border-radius:50%; background:var(--txt3); opacity:.55; flex:none; }
+.backup-test-light[data-state="passed"]{ background:var(--ok); box-shadow:0 0 7px color-mix(in srgb,var(--ok) 45%,transparent); opacity:1; }
+.backup-test-light[data-state="failed"]{ background:var(--err); opacity:1; }
+.backup-test-light[data-state="testing"]{ background:var(--steam); opacity:1; }
+.backup-test-result{ font-size:10px; color:var(--txt3); }
+.backup-test-result[data-state="passed"]{ color:var(--ok); }
+.backup-test-result[data-state="failed"]{ color:var(--err); }
+.backup-preview-label{ font-size:10px; color:var(--txt3); }
+.backup-feedback{ flex:none; font-size:10.5px; color:var(--txt2); padding:0 2px; line-height:1.6; }
+.backup-feedback:empty{ display:none; }
+.backup-queue-head{ display:flex; align-items:center; justify-content:space-between; padding:0 2px 2px; }
+.backup-queue-head .name{ font-size:12px; font-weight:600; }
+.backup-queue-head .hint{ font-size:10px; color:var(--txt3); }
+.backup-list{ display:flex; flex-direction:column; gap:8px; }
+.backup-account{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 12px; display:flex; align-items:center; gap:10px; }
+.backup-account .avatar{ width:30px; height:30px; font-size:11px; border-radius:9px; }
+.backup-account .acct-name{ font-size:12px; }
+.backup-account .acct-sub{ font-size:10px; line-height:1.5; }
+.backup-state{ font-size:9.5px; color:var(--warn); white-space:nowrap; border:1px solid color-mix(in srgb,var(--warn) 25%,transparent); border-radius:99px; padding:2px 7px; background:color-mix(in srgb,var(--warn) 6%,transparent); }
+.backup-empty{ padding:44px 12px; text-align:center; color:var(--txt3); font-size:11px; line-height:1.8; border:1px dashed var(--line); border-radius:10px; }
+.backup-empty svg{ width:30px; height:30px; margin-bottom:10px; color:var(--steam); opacity:.7; }
+.backup-modal button:focus-visible{ outline:2px solid var(--steam); outline-offset:2px; }
+body.preview.backup-review{ padding:16px; }
+body.preview.backup-review .window{ flex-shrink:0; }
 /* ---- 设置页 ---- */
 .set-list{ display:flex; flex-direction:column; gap:14px; }
 .group{ background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
@@ -402,7 +463,7 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.0</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.1</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -474,7 +535,9 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
         <!-- Steam 账号面板（内嵌，替代原模态）：
              「当前登录」标记仅当 Steam 进程活跃 且 登录态为该账号 时显示 -->
         <div class="acct-panel">
-          <div class="ap-head"><span class="ap-title">STEAM 账号</span><span class="cnt" id="acctCnt">—</span></div>
+          <div class="ap-head"><span class="ap-title">STEAM 账号</span><span class="cnt" id="acctCnt">—</span>
+            <button type="button" class="mini-link backup-entry" id="openBackup" aria-label="账号备份：未开启" data-tip="自动备份未开启" data-tip-pos="b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H5a4 4 0 0 1-.5-8A7 7 0 0 1 18 8a5 5 0 0 1 1 10h-2M12 20V11m-3 3 3-3 3 3"/></svg>账号备份<svg id="backupIndicator" class="backup-indicator" data-state="disabled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></button>
+          </div>
           <!-- 新增登录（外显一行，位于账号列表上方，2026-09-29 用户定稿）：账号 + 密码 + 登录 -->
           <div class="add-row">
             <input type="text" id="fUser" placeholder="账号" autocomplete="off" spellcheck="false">
@@ -555,7 +618,7 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.0</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.1</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -568,7 +631,7 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
           <div class="env-row"><span class="k">数据目录</span><span class="v">.\Data（便携模式）</span><span class="st acc"><span class="dot"></span>exe 同级</span></div>
           <div class="env-row"><span class="k">配置包</span><span class="v">编译期内嵌 · LOL 5 个 + Steam 2 个</span></div>
         </div>
-        <div class="copy">© 2026 GameReady · 仅在本机处理游戏配置，不上传任何数据</div>
+        <div class="copy">© 2026 GameReady · 游戏配置在本机处理；开启账号备份后上传至配置的 NAS</div>
       </section>
     </div>
   </div>
@@ -598,6 +661,52 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
           </span>
         </div>
         <div class="f-note" id="pathNote">保存时校验路径有效性（存在 LeagueClient.exe / steam.exe），检测不到将标红提示</div>
+      </div>
+    </div>
+  </div>
+  <!-- ================ Steam 账号备份 ================ -->
+  <div class="modal-mask" id="backupMask">
+    <div class="modal backup-modal" role="dialog" aria-modal="true" aria-labelledby="backupTitle" aria-describedby="backupIntro">
+      <div class="modal-head"><h2 id="backupTitle">Steam 账号备份</h2><button type="button" class="x" id="closeBackup" aria-label="关闭账号备份">✕</button></div>
+      <div class="backup-intro" id="backupIntro">确认登录成功后备份到 NAS，同账号保留最新密码。</div>
+      <div class="seg backup-tabs" role="tablist" aria-label="账号备份">
+        <button type="button" id="backupConfigTab" class="on" role="tab" aria-selected="true" aria-controls="backupConfigPane" data-backup-tab="config">SFTP 配置</button>
+        <button type="button" id="backupQueueTab" role="tab" aria-selected="false" aria-controls="backupQueuePane" tabindex="-1" data-backup-tab="queue">待同步账号<span class="tab-count" id="backupQueueCount">0</span></button>
+      </div>
+      <div class="modal-body">
+        <div class="backup-pane show" id="backupConfigPane" role="tabpanel" aria-labelledby="backupConfigTab">
+          <div class="group">
+            <div class="row noborder backup-switch-row">
+              <div class="info"><div class="name">自动备份</div><div class="desc">开启后，将 Steam 账号和密码上传至此 NAS</div></div>
+              <button type="button" class="toggle blue" id="backupEnabled" role="switch" aria-label="自动备份" aria-checked="false"></button>
+            </div>
+          </div>
+          <div class="group">
+            <div class="backup-fields">
+              <div class="backup-grid">
+                <div class="f-row"><label for="backupHost">服务器域名</label><input id="backupHost" type="text" placeholder="nas.example.com" autocomplete="off" spellcheck="false"></div>
+                <div class="f-row"><label for="backupPort">端口</label><input id="backupPort" type="text" inputmode="numeric" value="2022" autocomplete="off"></div>
+              </div>
+              <div class="backup-grid equal">
+                <div class="f-row"><label for="backupUser">NAS 用户名</label><input id="backupUser" type="text" placeholder="请输入用户名" autocomplete="off" spellcheck="false"></div>
+                <div class="f-row"><label for="backupPassword">NAS 密码</label><div class="backup-password"><input id="backupPassword" type="password" placeholder="请输入密码" autocomplete="off"><button type="button" class="password-reveal" id="backupReveal" aria-label="显示 NAS 密码" aria-pressed="false">显示</button></div></div>
+              </div>
+              <div class="f-row"><label for="backupRemotePath">远程备份文件</label><input id="backupRemotePath" type="text" placeholder="例如 /GameReady/accounts.txt" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <div class="backup-format"><span>TXT · 同账号更新密码</span><code>账号----密码</code></div>
+          </div>
+          <div class="backup-note">配置以明文保存在 exe 同级 Data 目录，配置一次即可沿用。<br>远程目录请先在 NAS 创建，并填写 SFTP 中的实际路径。</div>
+        </div>
+        <div class="backup-pane" id="backupQueuePane" role="tabpanel" aria-labelledby="backupQueueTab" hidden>
+          <div class="backup-queue-head"><span class="name" id="backupPendingTitle">待同步 · 0 条</span><span class="hint" id="backupQueueHint">登录记录队列</span></div>
+          <div class="backup-list" id="backupQueueList"></div>
+          <div class="backup-note">只上传已确认登录成功的密码；历史记录需先验证登录。<br>开启备份或立即同步时补传已验证账号；断网后自动重试。</div>
+        </div>
+        <div class="backup-feedback" id="backupFeedback" role="status" aria-live="polite"></div>
+      </div>
+      <div class="backup-foot">
+        <div class="f-actions" id="backupConfigActions"><div class="backup-test-group"><button type="button" class="btn" id="backupTest">测试连接</button><span id="backupTestLight" class="backup-test-light" data-state="untested" role="status" aria-label="当前配置尚未测试"></span><span id="backupTestResult" class="backup-test-result" data-state="untested"></span></div><button type="button" class="btn primary" id="backupSave">保存配置</button></div>
+        <div class="f-actions" id="backupQueueActions" hidden><span class="backup-preview-label" id="backupLastSync">尚未同步</span><button type="button" class="btn primary" id="backupSync">立即同步</button></div>
       </div>
     </div>
   </div>
@@ -956,6 +1065,7 @@ function animateCover(ms){   // 本地进度环动画（约 1.2s），真实结�
 }
 coverBtn.addEventListener('click', async ()=>{
   if(coverBusy) return;
+  if(switchBusy || loginBusy || delBusy){ toast('Steam 账号操作进行中，请稍候', 'err'); return; }
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   if(!state.currentSid64){   // R2：Steam 未运行/未登录不可覆盖——无进度环，按钮灰一下表示无效点击
     coverBtn.classList.remove('invalid'); void coverBtn.offsetWidth;   // 重触发动画
@@ -972,7 +1082,9 @@ coverBtn.addEventListener('click', async ()=>{
   let failed = false;
   const job = (async ()=>{
     try{
-      applyCoverReport(await invoke('steam_cover', { includeGlobal: state.globalOn }));
+      const report = await invoke('steam_cover', { includeGlobal: state.globalOn });
+      failed = !!(report.failed && report.failed.length);
+      applyCoverReport(report);
     }catch(e){ failed = true; toast(errText(e), 'err'); }
   })();
   await Promise.all([animateCover(1200), job]);
@@ -1052,7 +1164,7 @@ function renderAccountsPage(){
   box.appendChild(frag);
 }
 async function doSwitch(a){
-  if(switchBusy) return;
+  if(switchBusy || loginBusy || delBusy || coverBusy){ toast('Steam 操作进行中，请稍候', 'err'); return; }
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   switchBusy = true;
   toast('正在登录 '+displayName(a)+'…', null, true);
@@ -1068,11 +1180,11 @@ async function doSwitch(a){
 }
 let delBusy = false;
 async function doDelete(a){
-  if(delBusy) return;                       // 回归走查：删除最长 10s+，防重入（避免双确认/双 toast）
+  if(delBusy || loginBusy || switchBusy || coverBusy){ toast('Steam 操作进行中，请稍候', 'err'); return; }
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   const msg = '将完全清除账号「'+displayName(a)+'」在本机的所有数据：\n\n· loginusers.vdf 中的登录记录\n· userdata\\<该账号>\\ 整个配置目录\n\n全局配置不受影响。确定删除？';
-  if(!await askConfirm(msg)) return;
   delBusy = true;
+  if(!await askConfirm(msg)){ delBusy = false; return; }
   // 该卡片按钮置灰防重（refreshAccounts 后重建自然还原）
   const sid = String(a.steam_id64);
   document.querySelectorAll('.acct').forEach(c=>{
@@ -1094,6 +1206,7 @@ async function doDelete(a){
 /* 自定义确认模态（Promise 化，替代系统 confirm —— 全程序禁用系统弹窗） */
 let cfResolve = null;
 function askConfirm(msg, title){
+  if(cfResolve) return Promise.resolve(false);
   return new Promise(res => {
     cfResolve = res;
     const t = document.getElementById('cfTitle'), m = document.getElementById('cfMsg');
@@ -1111,12 +1224,12 @@ document.getElementById('cfYes').addEventListener('click', ()=>cfClose(true));
 document.getElementById('cfNo').addEventListener('click', ()=>cfClose(false));
 document.getElementById('cfClose').addEventListener('click', ()=>cfClose(false));
 document.getElementById('cfMask').addEventListener('click', e=>{ if(e.target.id==='cfMask') cfClose(false); });
-/* 新增登录（外显一行）：login_new；点击登录先剔除账号/密码首尾空格并回填输入框 */
+/* 新增登录：账号名剔除首尾空格，密码保留原始内容。 */
 $('doLogin').addEventListener('click', async ()=>{
-  const u = $('fUser').value.trim(), p = $('fPass').value.trim();
-  $('fUser').value = u; $('fPass').value = p;   // 剔除结果即刻可见
+  const u = $('fUser').value.trim(), p = $('fPass').value;
+  $('fUser').value = u;
   if(!u || !p){ toast('请输入账号和密码', 'err'); (!u ? $('fUser') : $('fPass')).focus(); return; }
-  if(loginBusy || !hasTauri){ if(!hasTauri) toast(NO_TAURI_MSG, 'err'); return; }
+  if(loginBusy || switchBusy || delBusy || coverBusy || !hasTauri){ toast(!hasTauri ? NO_TAURI_MSG : 'Steam 操作进行中，请稍候', 'err'); return; }
   loginBusy = true;
   const btn = $('doLogin'); btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span> 登录中…';
   toast('正在登录 '+u+'…', null, true);
@@ -1134,6 +1247,263 @@ $('doLogin').addEventListener('click', async ()=>{
 [$('fUser'),$('fPass')].forEach(i=>i.addEventListener('keydown', e=>{
   if(e.key==='Enter' && !loginBusy) $('doLogin').click();
 }));
+
+/* ---------- Steam 账号备份：配置、持久队列与后台状态 ---------- */
+let backupReturnFocus = null;
+let backupDirty = false, backupBusy = false, backupFingerprint = '', backupSnapshot = null;
+let backupTestConfig = null;
+function sameBackupConnection(a,b){
+  return !!a && !!b && ['host','port','username','password','remote_path'].every(key=>a[key]===b[key]);
+}
+function setBackupTestStatus(status){
+  const label = {untested:'当前配置尚未测试',testing:'正在测试连接',passed:'本次连接测试通过',failed:'本次连接测试失败'}[status];
+  $('backupTestLight').dataset.state = status;
+  $('backupTestLight').setAttribute('aria-label',label);
+  $('backupTestResult').dataset.state = status;
+  $('backupTestResult').textContent = {untested:'',testing:'验证中',passed:'测试通过',failed:'测试失败'}[status];
+}
+function updateBackupIndicator(snapshot, unavailable){
+  const enabled = !!(snapshot && snapshot.config && snapshot.config.enabled);
+  const ready = enabled && !!snapshot.config_verified && !unavailable;
+  const status = unavailable ? 'warning' : !enabled ? 'disabled' : ready ? 'ready' : 'warning';
+  const message = unavailable ? '备份配置读取失败' : !enabled ? '自动备份未开启'
+    : ready ? '自动备份已开启，配置验证通过' : '自动备份已开启，配置未验证或连接异常';
+  const icon = $('backupIndicator');
+  icon.dataset.state = status;
+  icon.innerHTML = '<circle cx="12" cy="12" r="9"/>' + (status==='ready'
+    ? '<path d="m7 12 3 3 7-7"/>' : status==='warning'
+    ? '<path d="M12 7v6"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>'
+    : '<path d="M8 12h8"/>');
+  $('openBackup').dataset.tip = message;
+  $('openBackup').setAttribute('aria-label','账号备份：'+message);
+}
+function renderBackupQueue(rows,missing,unconfirmed){
+  missing = missing || [];
+  unconfirmed = unconfirmed || [];
+  $('backupQueueCount').textContent = String(rows.length+missing.length+unconfirmed.length);
+  $('backupPendingTitle').textContent = '待上传 · '+rows.length+' 条';
+  const list = $('backupQueueList');
+  list.replaceChildren();
+  if(!rows.length && !missing.length && !unconfirmed.length){
+    const empty = el('div','backup-empty');
+    empty.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><div>暂无待同步账号</div><div>成功登录后才会加入上传队列</div>';
+    list.appendChild(empty);
+    return;
+  }
+  rows.forEach(row=>{
+    const card = el('div','backup-account');
+    card.appendChild(el('div','avatar',firstChar(row.account).toUpperCase()));
+    const info = el('div','acct-info');
+    const name = el('div','acct-name');
+    name.appendChild(el('span','',row.account));
+    info.appendChild(name);
+    const time = row.ts_ms ? fmtMDHM(new Date(row.ts_ms)) : row.time;
+    info.appendChild(el('div','acct-sub',row.source+' · '+(time || '待同步')));
+    card.appendChild(info);
+    card.appendChild(el('span','backup-state','待同步'));
+    list.appendChild(card);
+  });
+  if(unconfirmed.length){
+    list.appendChild(el('div','backup-preview-label','待验证登录 · '+unconfirmed.length+' 个账号'));
+    unconfirmed.forEach(account=>{
+      const card=el('div','backup-account');
+      card.appendChild(el('div','avatar',firstChar(account).toUpperCase()));
+      const info=el('div','acct-info');
+      info.appendChild(el('div','acct-name',account));
+      info.appendChild(el('div','acct-sub','密码尚未确认登录成功，暂不上传'));
+      card.appendChild(info);
+      const button=el('button','btn','验证登录');
+      button.type='button';
+      button.addEventListener('click',()=>{
+        const local=(state.accounts || []).find(a=>a.account_name.toLowerCase()===account.toLowerCase());
+        closeBackup();
+        if(local){ doSwitch(local); }
+        else { $('fUser').value=account; $('fPass').value=''; $('fPass').focus(); toast('请补输密码并完成登录后再备份'); }
+      });
+      card.appendChild(button);
+      list.appendChild(card);
+    });
+  }
+  if(missing.length){
+    list.appendChild(el('div','backup-preview-label','待补密码 · '+missing.length+' 个账号'));
+    missing.forEach(account=>{
+      const card = el('div','backup-account');
+      card.appendChild(el('div','avatar',firstChar(account).toUpperCase()));
+      const info = el('div','acct-info');
+      info.appendChild(el('div','acct-name',account));
+      info.appendChild(el('div','acct-sub','本机无可用密码，暂不能上传'));
+      card.appendChild(info);
+      const button = el('button','btn','补密码');
+      button.type='button';
+      button.addEventListener('click',()=>{
+        closeBackup();
+        $('fUser').value=account;
+        $('fPass').value='';
+        $('fPass').focus();
+      });
+      card.appendChild(button);
+      list.appendChild(card);
+    });
+  }
+}
+function showBackupTab(name, focus){
+  const config = name === 'config';
+  document.querySelectorAll('[data-backup-tab]').forEach(tab=>{
+    const active = tab.dataset.backupTab === name;
+    tab.classList.toggle('on',active);
+    tab.setAttribute('aria-selected',String(active));
+    tab.tabIndex = active ? 0 : -1;
+    if(active && focus) tab.focus();
+  });
+  [['backupConfigPane',config],['backupQueuePane',!config]].forEach(([id,active])=>{
+    $(id).hidden = !active;
+    $(id).classList.toggle('show',active);
+  });
+  $('backupConfigActions').hidden = !config;
+  $('backupQueueActions').hidden = config;
+}
+function backupConfig(){
+  return {enabled:$('backupEnabled').getAttribute('aria-checked')==='true',
+    host:$('backupHost').value.trim(),port:Number($('backupPort').value),
+    username:$('backupUser').value.trim(),password:$('backupPassword').value,
+    remote_path:$('backupRemotePath').value.trim(),fingerprint:backupFingerprint};
+}
+function applyBackup(snapshot, fill){
+  if(!snapshot) return;
+  backupSnapshot = snapshot;
+  updateBackupIndicator(snapshot);
+  renderBackupQueue(snapshot.queue || [],snapshot.missing_password_accounts || [],snapshot.unconfirmed_password_accounts || []);
+  const success = snapshot.last_success_ms;
+  $('backupLastSync').textContent = success ? '上次 '+fmtMDHM(new Date(success)) : '尚未同步';
+  $('backupFeedback').textContent = snapshot.message || '';
+  if(snapshot.inventory_error) $('backupFeedback').textContent += '；'+snapshot.inventory_error;
+  if(snapshot.next_retry_ms > Date.now()) $('backupFeedback').textContent += '（下次 '+fmtHM(new Date(snapshot.next_retry_ms))+' 重试）';
+  if(fill){
+    const c=snapshot.config || {};
+    $('backupHost').value=c.host || '';
+    $('backupPort').value=c.port || 2022;
+    $('backupUser').value=c.username || '';
+    $('backupPassword').value=c.password || '';
+    $('backupRemotePath').value=c.remote_path || '';
+    $('backupEnabled').classList.toggle('on',!!c.enabled);
+    $('backupEnabled').setAttribute('aria-checked',String(!!c.enabled));
+    backupFingerprint=c.fingerprint || '';
+    if(!sameBackupConnection(backupTestConfig,backupConfig())){
+      backupTestConfig=null;
+      setBackupTestStatus('untested');
+    }
+    backupDirty=false;
+  }
+}
+async function refreshBackup(fill){
+  if(!hasTauri) return;
+  try{ applyBackup(await invoke('backup_get'),!!fill && !backupDirty); }
+  catch(e){ $('backupFeedback').textContent=errText(e); updateBackupIndicator(backupSnapshot,true); }
+}
+async function backupAction(action){
+  if(backupBusy) return;
+  if(!hasTauri){ $('backupFeedback').textContent='浏览器仅预览界面，请在 GameReady 中配置和同步'; return; }
+  if(action==='sync' && backupDirty){ $('backupFeedback').textContent='配置已修改，请先保存配置'; return; }
+  const config=backupConfig();
+  if(action!=='sync' && (!Number.isInteger(config.port) || config.port<1 || config.port>65535)){
+    $('backupFeedback').textContent='端口必须为 1–65535 的整数'; return;
+  }
+  const id=action==='test'?'backupTest':action==='save'?'backupSave':'backupSync';
+  const button=$(id), original=button.textContent;
+  backupBusy=true;
+  ['backupTest','backupSave','backupSync'].forEach(n=>$(n).disabled=true);
+  ['backupHost','backupPort','backupUser','backupPassword','backupRemotePath','backupEnabled'].forEach(n=>$(n).disabled=true);
+  button.innerHTML='<span class="spin-sm"></span> '+(action==='test'?'测试中…':action==='save'?'保存中…':'同步中…');
+  $('backupFeedback').textContent=action==='test'?'正在验证 SFTP 登录和目标目录读写…':action==='save'?'正在保存配置…':'正在合并远程账号文件…';
+  if(action==='test'){ backupTestConfig=null; setBackupTestStatus('testing'); }
+  try{
+    if(action==='test'){
+      const report=await invoke('backup_test',{config});
+      if(config.host===backupConfig().host && config.port===backupConfig().port) backupFingerprint=report.fingerprint;
+      backupTestConfig=config;
+      setBackupTestStatus('passed');
+      $('backupFeedback').textContent=report.message+'；保存配置后生效';
+    }else if(action==='save'){
+      const snapshot=await invoke('backup_save',{config});
+      applyBackup(snapshot,true);
+    }else{
+      applyBackup(await invoke('backup_sync'),false);
+    }
+  }catch(e){
+    $('backupFeedback').textContent=errText(e);
+    if(action==='test'){ backupTestConfig=null; setBackupTestStatus('failed'); }
+  }
+  finally{
+    backupBusy=false;
+    ['backupTest','backupSave','backupSync'].forEach(n=>$(n).disabled=false);
+    ['backupHost','backupPort','backupUser','backupPassword','backupRemotePath','backupEnabled'].forEach(n=>$(n).disabled=false);
+    button.textContent=original;
+  }
+}
+function openBackup(){
+  backupReturnFocus = document.activeElement;
+  showBackupTab('config');
+  $('backupMask').classList.add('show');
+  $('backupConfigTab').focus();
+  refreshBackup(true);
+}
+function closeBackup(){
+  $('backupMask').classList.remove('show');
+  $('backupPassword').type = 'password';
+  $('backupReveal').textContent = '显示';
+  $('backupReveal').setAttribute('aria-label','显示 NAS 密码');
+  $('backupReveal').setAttribute('aria-pressed','false');
+  if(backupReturnFocus) backupReturnFocus.focus();
+}
+$('openBackup').addEventListener('click',openBackup);
+$('closeBackup').addEventListener('click',closeBackup);
+$('backupMask').addEventListener('click',e=>{ if(e.target===$('backupMask')) closeBackup(); });
+document.querySelectorAll('[data-backup-tab]').forEach(tab=>{
+  tab.addEventListener('click',()=>showBackupTab(tab.dataset.backupTab));
+  tab.addEventListener('keydown',e=>{
+    if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){
+      e.preventDefault();
+      const name = e.key==='Home' ? 'config' : e.key==='End' ? 'queue' : tab.dataset.backupTab==='config' ? 'queue' : 'config';
+      showBackupTab(name,true);
+    }
+  });
+});
+$('backupEnabled').addEventListener('click',function(){
+  const enabled = this.getAttribute('aria-checked') !== 'true';
+  this.setAttribute('aria-checked',String(enabled));
+  this.classList.toggle('on',enabled);
+  backupDirty=true;
+  $('backupFeedback').textContent = '开关已修改，保存配置后生效';
+});
+['backupHost','backupPort','backupUser','backupPassword','backupRemotePath'].forEach(id=>{
+  $(id).addEventListener('input',()=>{
+    backupDirty=true;
+    backupTestConfig=null;
+    setBackupTestStatus('untested');
+    if(id==='backupHost'||id==='backupPort') backupFingerprint='';
+  });
+});
+$('backupReveal').addEventListener('click',function(){
+  const reveal = $('backupPassword').type === 'password';
+  $('backupPassword').type = reveal ? 'text' : 'password';
+  this.textContent = reveal ? '隐藏' : '显示';
+  this.setAttribute('aria-label',reveal ? '隐藏 NAS 密码' : '显示 NAS 密码');
+  this.setAttribute('aria-pressed',String(reveal));
+});
+$('backupTest').addEventListener('click',()=>backupAction('test'));
+$('backupSave').addEventListener('click',()=>backupAction('save'));
+$('backupSync').addEventListener('click',()=>backupAction('sync'));
+document.addEventListener('keydown',e=>{
+  if(!$('backupMask').classList.contains('show') || $('cfMask').classList.contains('show')) return;
+  if(e.key==='Escape'){ e.preventDefault(); closeBackup(); return; }
+  if(e.key==='Tab'){
+    const nodes = [...$('backupMask').querySelectorAll('button:not([disabled]),input:not([disabled])')].filter(n=>n.tabIndex>=0 && n.getClientRects().length);
+    const first = nodes[0], last = nodes[nodes.length-1];
+    if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+    else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+  }
+});
+renderBackupQueue([]);
 
 /* ---------- 覆盖日志页：list_logs 渲染（后端已按 ts_ms 严格降序） ---------- */
 const MAX_LOG_RENDER = 300;
@@ -1199,10 +1569,13 @@ function renderLogs(){
   if(logs.length > MAX_LOG_RENDER) frag.appendChild(el('div','logs-empty','仅显示最近 '+MAX_LOG_RENDER+' 条，更早的 '+(logs.length-MAX_LOG_RENDER)+' 条已省略'));
   list.appendChild(frag);
 }
+let logRequest = 0;
 async function loadLogs(){
+  const request = ++logRequest;
   if(!hasTauri){ state.logs = []; renderLogs(); return; }   // 走查：预览模式也渲染空态而非整页空白
   try{
     const list = await invoke('list_logs', { filter: state.logFilter });
+    if(request !== logRequest) return;
     state.logs = Array.isArray(list) ? list : [];
     state.logsDirty = false;
     renderLogs();
@@ -1223,7 +1596,7 @@ $('chips').addEventListener('click', e=>{
 function onLogAppended(lg){
   state.logsDirty = true;
   if(curPage()==='logs' && (state.logFilter==='all' || lg.kind===state.logFilter)){
-    if(Array.isArray(state.logs)){ state.logs.unshift(lg); renderLogs(); state.logsDirty = false; }
+    if(Array.isArray(state.logs)){ state.logs.unshift(lg); state.logs.length = Math.min(state.logs.length,5000); renderLogs(); state.logsDirty = false; }
   }
 }
 
@@ -1256,13 +1629,14 @@ async function browse(id){
 function setPathNote(st){
   const okLol = !!(st.paths_valid && st.paths_valid.lol);
   const okSteam = !!(st.paths_valid && st.paths_valid.steam);
-  $('mLolPath').classList.toggle('err', !okLol);
-  $('mSteamPath').classList.toggle('err', !okSteam);
+  const emptyLol = !$('mLolPath').value.trim(), emptySteam = !$('mSteamPath').value.trim();
+  $('mLolPath').classList.toggle('err', !okLol && !emptyLol);
+  $('mSteamPath').classList.toggle('err', !okSteam && !emptySteam);
   $('pathNote').innerHTML =
-      (okLol ? '<span class="okc">✓ 英雄联盟已检测到</span>' : '<span style="color:var(--err)">✗ 英雄联盟：未检测到 LeagueClient.exe</span>')
+      (emptyLol ? '<span>英雄联盟：未配置</span>' : okLol ? '<span class="okc">✓ 英雄联盟已检测到</span>' : '<span style="color:var(--err)">✗ 英雄联盟：未检测到 LeagueClient.exe</span>')
     + '　'
-    + (okSteam ? '<span class="okc">✓ Steam 已检测到</span>' : '<span style="color:var(--err)">✗ Steam：未检测到 steam.exe</span>');
-  return okLol && okSteam;
+    + (emptySteam ? '<span>Steam：未配置</span>' : okSteam ? '<span class="okc">✓ Steam 已检测到</span>' : '<span style="color:var(--err)">✗ Steam：未检测到 steam.exe</span>');
+  return (emptyLol || okLol) && (emptySteam || okSteam);
 }
 $('closePath').addEventListener('click', ()=>pathMask.classList.remove('show'));
 $('cancelPath').addEventListener('click', ()=>pathMask.classList.remove('show'));
@@ -1270,14 +1644,14 @@ pathMask.addEventListener('click', e=>{ if(e.target===pathMask) pathMask.classLi
 $('savePath').addEventListener('click', async ()=>{
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   const lol = $('mLolPath').value.trim(), steam = $('mSteamPath').value.trim();
-  if(!lol || !steam){ toast('路径不能为空', 'err'); return; }
+  if(!lol && !steam){ toast('请至少填写一个游戏路径', 'err'); return; }
   const btn = $('savePath'); btn.disabled = true;
   btn.innerHTML = '<span class="spin-sm"></span> 保存中…';
   try{
     const st = await invoke('set_paths', { lolRoot: lol, steamRoot: steam });   // 返回最新 AppStatus
     if(st){
-      applyStatus(st);
       const allOk = setPathNote(st);
+      applyStatus(st);
       if(allOk){ pathMask.classList.remove('show'); toast('路径已保存', 'ok'); }
       else toast('部分路径无效，请检查标红项', 'err');
     }
@@ -1292,7 +1666,7 @@ $('reDetectPath').addEventListener('click', async ()=>{
   if(detectingPath) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   const lolV = $('mLolPath').value.trim(), steamV = $('mSteamPath').value.trim();
-  if(!lolV || !steamV){ toast('路径不能为空，请填写后再校验', 'err'); return; }   // 回归走查：空值校验
+  if(!lolV && !steamV){ toast('请至少填写一个游戏路径', 'err'); return; }
   detectingPath = true;
   const btn = $('reDetectPath'); btn.disabled = true;
   const orig = btn.textContent;
@@ -1309,16 +1683,26 @@ $('reDetectPath').addEventListener('click', async ()=>{
 });
 
 /* ---------- 设置页：改动即收集进 Settings，防抖 300ms 整体回存 ---------- */
-// PROTOCOL-NOTE: Settings 的 bool 字段无 serde(default)，反序列化要求字段齐全；
-// 前端始终以 get_settings 返回的完整对象为底本修改后整体发送。建议后端补充 #[serde(default)] 增强健壮性。
+// 以完整设置快照保存；串行提交，避免较早的请求覆盖用户较新的改动。
 let settingsTimer = null;
+let settingsSaving = false, settingsPending = false;
+async function flushSettings(){
+  settingsPending = true;
+  if(settingsSaving) return;
+  settingsSaving = true;
+  try{
+    while(settingsPending){
+      settingsPending = false;
+      const settings = {...state.settings};
+      try{ await invoke('set_settings', {settings}); }
+      catch(e){ toast('设置保存失败：'+errText(e), 'err'); }
+    }
+  }finally{ settingsSaving = false; }
+}
 function queueSaveSettings(){
   if(!hasTauri || !state.settings) return;
   clearTimeout(settingsTimer);
-  settingsTimer = setTimeout(async ()=>{
-    try{ await invoke('set_settings', { settings: state.settings }); }
-    catch(e){ toast('设置保存失败：'+errText(e), 'err'); }
-  }, 300);
+  settingsTimer = setTimeout(flushSettings, 300);
 }
 $('tgAutostart').addEventListener('click', function(){
   if(!state.settings) return;
@@ -1358,6 +1742,7 @@ $('btnClose').addEventListener('click', async ()=>{
   if(!getCurrentWindow) return;
   const w = getCurrentWindow();
   try{
+    if(settingsTimer){ clearTimeout(settingsTimer); settingsTimer = null; await flushSettings(); }
     if(state.settings && state.settings.close_behavior === 'tray') await w.hide();
     else await w.close();
   }catch(_){ /* 窗口操作失败静默 */ }
@@ -1366,11 +1751,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.0';
+  let v = '0.1.1';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.0 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.1 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();
@@ -1405,14 +1790,42 @@ async function init(){
   await on('cover-done', e=>{ if(e.payload) applyCoverReport(e.payload); });
   await on('log-appended', e=>{ if(e.payload) onLogAppended(e.payload); });
   await on('steam-accounts-changed', ()=>{ refreshAccounts();                  // 模态开着会自动刷新列表
+                                             refreshBackup(false);
                                              invoke('get_status').then(applyStatus).catch(()=>{}); });   // + 登录态真值刷新
+  await on('backup-changed',e=>applyBackup(e.payload,false));
   try{ applyStatus(await invoke('get_status')); }
   catch(e){ toast('状态读取失败：'+errText(e), 'err'); }
   try{ applySettings(await invoke('get_settings')); }
   catch(e){ toast('设置读取失败：'+errText(e), 'err'); }
   refreshAccounts();
+  refreshBackup(true);
 }
 init();
+
+/* 浏览器 UI 审阅入口：仅在无 Tauri 且 ?preview=backup 时使用虚拟示例。 */
+if(!hasTauri && new URLSearchParams(location.search).get('preview')==='backup'){
+  document.body.classList.add('backup-review');
+  const fitBackupPreview = ()=>{
+    const scale = Math.max(.2,Math.min(1,(innerWidth-32)/480,(innerHeight-32)/660));
+    document.querySelector('.window').style.zoom = String(scale);
+  };
+  fitBackupPreview();
+  window.addEventListener('resize',fitBackupPreview);
+  $('noTauri').style.display = 'none';
+  location.hash = 'steam';
+  const demoState = new URLSearchParams(location.search).get('backupState') || 'disabled';
+  applyBackup({config:{enabled:demoState!=='disabled',host:'nas.example.com',port:2022,username:'gameready',password:'',remote_path:'/GameReady/accounts.txt'},
+    config_verified:demoState==='ready',status:demoState==='ready'?'idle':'pending',message:'浏览器示例数据',
+    missing_password_accounts:['demo_history_only'],unconfirmed_password_accounts:['demo_unconfirmed'],queue:[
+      {account:'demo_player_02',source:'列表登录',time:'10-09 14:35'},
+      {account:'demo_player_01',source:'历史账号补传',time:'10-09 14:41'},
+    ]},true);
+  if(demoState==='ready') setBackupTestStatus('passed');
+  if(demoState==='warning') setBackupTestStatus('failed');
+  $('backupQueueHint').textContent = '示例数据';
+  toast('浏览器界面预览 · 示例数据 · 在应用中使用备份功能',null,true);
+  openBackup();
+}
 
 </script>
 </body>

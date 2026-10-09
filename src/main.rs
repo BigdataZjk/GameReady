@@ -23,6 +23,9 @@ use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::Threading::{GetCurrentProcess, WaitForSingleObject, INFINITE};
 
+mod backup;
+mod vdf;
+
 
 /// 托盘唤起主窗口
 fn show_main(app: &tauri::AppHandle) {
@@ -65,6 +68,10 @@ fn main() {
             commands::delete_account,
             commands::login_new,
             commands::list_logs,
+            commands::backup_get,
+            commands::backup_save,
+            commands::backup_test,
+            commands::backup_sync,
         ])
         .setup(|app| {
             // ③ 系统托盘（关闭到托盘模式的找回入口：双击/菜单"显示主窗口"，菜单"退出"）
@@ -92,6 +99,7 @@ fn main() {
 
             // ④ 进程活跃监听（R1 绿点）：后台轮询 LOL / Steam 客户端，变化时推 "game-active"
             spawn(app.handle().clone());
+            backup::start(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -133,7 +141,8 @@ pub struct PathsValid {
 }
 
 /// 用户设置（Data\settings.json 的结构）
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct Settings {
     pub lol_root: Option<String>,
     pub steam_root: Option<String>,
@@ -142,6 +151,14 @@ pub struct Settings {
     pub start_minimized: bool,
     pub close_behavior: String, // "tray" | "exit"
     pub accent: String,         // 强调色，如 "#00e5ff"
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { lol_root: None, steam_root: None, global_cover_on: false,
+            autostart: false, start_minimized: false,
+            close_behavior: "tray".into(), accent: "#00e5ff".into() }
+    }
 }
 
 /// 覆盖日志条目（Data\logs.jsonl 一行一 JSON）
@@ -239,7 +256,7 @@ fn detect_steam_root() -> Option<String> {
     if let Ok(key) = hklm.open_subkey(r"SOFTWARE\WOW6432Node\Valve\Steam") {
         if let Ok(path) = key.get_value::<String, _>("InstallPath") {
             let p = path.trim().trim_end_matches('/').trim_end_matches('\\');
-            if !p.is_empty() {
+            if !p.is_empty() && steam_root_ok(Path::new(p)) {
                 return Some(p.to_string());
             }
         }
@@ -258,13 +275,14 @@ fn settings_path() -> PathBuf {
     data_dir().join("settings.json")
 }
 
-/// 读设置：文件不存在或解析失败 → 探测默认路径并落盘一份默认设置（顺带修复坏文件）
+/// 缺失时创建默认设置；损坏的原文件保留，避免丢失用户配置。
 pub fn load_settings() -> Settings {
     if let Ok(text) = std::fs::read_to_string(settings_path()) {
         if let Ok(s) = serde_json::from_str::<Settings>(&text) {
             return s;
         }
     }
+    if settings_path().exists() { return Settings::default(); }
     let (lol, steam) = detect_default_roots();
     let s = Settings {
         lol_root: lol,
@@ -275,21 +293,39 @@ pub fn load_settings() -> Settings {
         close_behavior: "tray".to_string(),
         accent: "#00e5ff".to_string(),
     };
-    save_settings(&s);
+    if !settings_path().exists() { let _ = save_settings(&s); }
     s
 }
 
 /// 原子写：先写 .tmp 再 rename（Windows 下 std rename 走 MoveFileEx 可覆盖已存在文件）
-pub fn save_settings(s: &Settings) {
-    let path = settings_path();
-    let tmp = data_dir().join("settings.json.tmp");
-    let text = serde_json::to_string_pretty(s).unwrap_or_else(|_| "{}".to_string());
-    if std::fs::write(&tmp, &text).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
-        return;
+pub fn save_settings(s: &Settings) -> Result<(), String> {
+    atomic_json(&settings_path(), s)
+}
+static SETTINGS_OP: Mutex<()> = Mutex::new(());
+
+fn checked_settings() -> Result<Settings, String> {
+    match fs::read_to_string(settings_path()) {
+        Ok(text) => serde_json::from_str(&text).map_err(|_| "Data\\settings.json 格式损坏，原文件已保留，请修复后再保存设置".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(load_settings()),
+        Err(e) => Err(format!("读取设置失败：{e}")),
     }
-    // 原子写失败（罕见）时清理残留并直接覆盖写保底
-    let _ = std::fs::remove_file(&tmp);
-    let _ = std::fs::write(&path, &text);
+}
+
+fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("序列化失败：{e}"))?;
+    let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("保存 {} 失败：{e}，原文件已保留", path.file_name().unwrap_or_default().to_string_lossy()));
+    }
+    Ok(())
 }
 
 // ==================== LOL 守护运行状态（AppStatus.lol_guard_on 数据源） ====================
@@ -374,7 +410,7 @@ fn append_and_truncate(entry: &LogEntry) {
     }
     // 读回全部行判断是否截断（文件不存在或读失败则直接结束）
     let Ok(f) = File::open(&path) else { return };
-    let lines: Vec<String> = BufReader::new(f).lines().flatten().collect();
+    let lines: Vec<String> = BufReader::new(f).lines().map_while(Result::ok).collect();
     if lines.len() <= MAX_ENTRIES {
         return;
     }
@@ -391,8 +427,7 @@ fn append_and_truncate(entry: &LogEntry) {
     }
 }
 
-/// 读全部日志：filter = "all"（或空串）不过滤，否则按 kind 精确匹配；
-/// 返回按 ts_ms 严格降序（最新在最上，R12 跨日同样倒序）
+// 日志读取命令位于 commands 模块，按时间降序返回。
 
 
 // ============================ watcher ============================
@@ -567,6 +602,19 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
         };
         let target = root.join(&rel);
         let mut r = CoverResult { rel, ok: true, err: None };
+        let bytes = if scope != PackScope::Lol {
+            let existing = match fs::read(&target) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => {
+                    r.ok = false; r.err = Some(format!("读取现有配置失败：{e}，未覆盖")); out.push(r); continue;
+                },
+            };
+            match vdf::merge(&existing, f.bytes) {
+                Ok(bytes) => bytes,
+                Err(e) => { r.ok = false; r.err = Some(e); out.push(r); continue; },
+            }
+        } else { f.bytes.to_vec() };
 
         // 父目录不存在则创建（userdata\{SID3}\config 等深层目录）
         if let Some(parent) = target.parent() {
@@ -579,9 +627,10 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
         }
 
         // 原子写：先写 .tmp 再 rename 覆盖（守护每 200ms 一轮，避免游戏恰好读到半截文件）
-        let tmp = target.with_extension("gameready.tmp");
-        match fs::write(&tmp, f.bytes).and_then(|_| fs::rename(&tmp, &target)) {
+        let tmp = target.with_extension(format!("{}.gameready.tmp", uuid::Uuid::new_v4()));
+        match fs::write(&tmp, &bytes).and_then(|_| fs::rename(&tmp, &target)) {
             Err(e) => {
+                let _ = fs::remove_file(&tmp);
                 r.ok = false;
                 r.err = Some(format!("写入失败: {e}"));
             }
@@ -683,7 +732,6 @@ pub struct CoverReport {
 }
 
 /// Steam 一键覆盖：账号组 localconfig.vdf 必覆盖，include_global=true 再覆盖全局 config.vdf
-
 /// 覆盖核心（调用方必须已持有 STEAM_OP 锁）。
 /// pub(crate)：login_new 登录成功后在锁内串联调用（登录+覆盖一步到位）。
 pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Result<CoverReport, String> {
@@ -789,20 +837,17 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
     // 直登后轮询 ≤15s 确认登录完成，只留日志不影响结果。
     if was_running {
         let cred_login = !current_account.is_empty() && get_cred(&current_account).is_some();
+        let sid64 = sid3_to_id64(&sid3).unwrap_or_default();
+        let before_ts = accounts_list_v().into_iter().find(|a| a.steam_id64 == sid64)
+            .map(|a| a.timestamp).unwrap_or(0);
         relaunch_with_cred(&steam_root, &current_account);
         if cred_login {
             // 确认轮询放后台线程（2026-09-29 提速）：文件早已写完、Steam 已重启，
             // 报告立即返回不被 ≤15s 确认拖住，结论只进日志
             let root2 = steam_root.clone();
-            let sid64 = sid3_to_id64(&sid3).unwrap_or_default();
             let _ = thread::Builder::new()
                 .name("cover-login-confirm".to_string())
                 .spawn(move || {
-                    let before_ts = accounts_list_v()
-                        .into_iter()
-                        .find(|a| a.steam_id64 == sid64)
-                        .map(|a| a.timestamp)
-                        .unwrap_or(0);
                     let mut confirmed = false;
                     for _ in 0..75 {
                         thread::sleep(Duration::from_millis(200));
@@ -856,10 +901,6 @@ pub struct GuardSummary {
     pub count: u64,
     pub elapsed_ms: u64,
 }
-
-/// 启动 LOL 守护（幂等：已在跑则直接 Ok）
-
-/// 停止守护：置停止位 → join 线程 → 返回统计并写结束日志
 
 /// 守护主循环（独立线程内运行）
 fn run_loop(
@@ -921,14 +962,17 @@ fn run_loop(
             // 清空全局句柄，允许再次 start。不 join 自己（线程即将退出，
             // JoinHandle 随 GuardHandle drop 即 detach，无泄漏风险）。
             if let Some(m) = GUARD.get() {
-                m.lock().unwrap().take();
+                let mut g = m.lock().unwrap();
+                if g.as_ref().is_some_and(|h| Arc::ptr_eq(&h.stop_flag, &stop_flag)) {
+                    g.take();
+                    set_guard_running(false);
+                }
             }
-            set_guard_running(false);
             return;
         }
 
         // 每 1s 推一次统计（首轮立即推，让前端尽快有数）
-        if last_emit.map_or(true, |t| t.elapsed() >= Duration::from_secs(1)) {
+        if last_emit.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
             let stats = GuardSummary {
                 count: count.load(Ordering::SeqCst),
                 elapsed_ms: now_ms().saturating_sub(start_ms),
@@ -971,10 +1015,11 @@ fn fmt_duration(ms: u64) -> String {
 /// CREATE_NO_WINDOW：taskkill / steam.exe 等子进程一律隐藏控制台窗口，避免闪黑框
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// SteamID64 → SteamID3 换算基数（实测：userdata 目录名 = SteamID64 − 76561197960265728）
-const SID64_BASE: u64 = 7_656_119_796_026_572_8;
+const SID64_BASE: u64 = 76_561_197_960_265_728;
 /// Steam 操作互斥锁：cover / switch / delete / login_new 全程持锁串行执行。
 /// 防止并发杀/启 Steam、并发写 loginusers.vdf 互相踩（覆盖结果被回写、双启、vdf 交错）。
 pub(crate) static STEAM_OP: Mutex<()> = Mutex::new(());
+static STEAM_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// 账号条目（对外合同结构，前端渲染用）
 #[derive(Serialize, Clone)]
@@ -997,10 +1042,10 @@ struct RawAccount {
 
 /// 从设置读取 Steam 根目录；未设置返回 Err
 fn steam_root_or_err() -> Result<String, String> {
-    load_settings()
+    checked_settings()?
         .steam_root
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "未设置 Steam 根目录，请先在设置中配置路径".to_string())
+        .filter(|s| !s.is_empty() && steam_root_ok(Path::new(s)))
+        .ok_or_else(|| "Steam 根目录未设置或无效，请先在设置中配置路径".to_string())
 }
 
 /// <steam_root>\config\loginusers.vdf
@@ -1162,7 +1207,9 @@ fn build_vdf(accounts: &[RawAccount]) -> String {
 fn read_vdf(root: &str) -> Result<String, String> {
     let path = vdf_path(root);
     let bytes = fs::read(&path).map_err(|e| format!("读取 loginusers.vdf 失败: {e}"))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let text = String::from_utf8(bytes).map_err(|_| "loginusers.vdf 不是 UTF-8 文本，原文件已保留".to_string())?;
+    vdf::validate_users(&text)?;
+    Ok(text)
 }
 
 /// 原子写回 loginusers.vdf：先写 .tmp 再 rename 覆盖（调用前必须确保 Steam 已完全退出，否则会被回写覆盖）
@@ -1285,7 +1332,7 @@ fn relaunch_with_cred(root: &str, account: &str) {
 }
 
 // ==================== 凭据存储（2026-09-20 用户拍板：自用工具，明文存 Data\accounts.json） ====================
-// 目的：列表"登录"与覆盖/删除后的重启统一走 steam.exe -login 账号 密码 直登，100% 成功。
+// 列表登录与覆盖/删除后的重启优先使用已保存凭据，并由 Steam 登录状态确认结果。
 // 实测诊断（全文件唯一完整版，他处一句话引用）：
 // ① -login 参数登录不保存 Steam 端免密凭据，vdf 里 RememberPassword 停留 0；
 // ② Steam 自带自动登录凭据约三个月未登录即失效（会停在登录页）——皆不可依赖，直登为准。
@@ -1294,38 +1341,46 @@ fn creds_path() -> PathBuf {
     data_dir().join("accounts.json")
 }
 
-fn load_creds() -> std::collections::HashMap<String, String> {
-    std::fs::read_to_string(creds_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+fn read_creds(path: &Path) -> Result<std::collections::BTreeMap<String, String>, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|_| "Data\\accounts.json 格式损坏，原文件已保留，请修复后重试".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(format!("读取本地账号文件失败：{e}")),
+    }
 }
 
 /// 键 = 账号名（登录发起前即已知，无需等 vdf 出现 sid64）
-pub fn save_cred_by_name(account: &str, password: &str) {
-    let mut m = load_creds();
-    m.insert(account.to_string(), password.to_string());
-    if let Ok(json) = serde_json::to_string_pretty(&m) {
-        let _ = std::fs::write(creds_path(), json);
-    }
+pub fn save_cred_by_name(account: &str, password: &str) -> Result<(), String> {
+    let mut m = read_creds(&creds_path())?;
+    replace_credential(&mut m, account, password);
+    backup::login_attempt_started(account).map_err(|e| e.message)?;
+    atomic_json(&creds_path(), &m)
 }
 
-pub fn remove_cred_by_name(account: &str) {
-    let mut m = load_creds();
-    if m.remove(account).is_some() {
-        if let Ok(json) = serde_json::to_string_pretty(&m) {
-            let _ = std::fs::write(creds_path(), json);
-        }
-    }
+fn replace_credential(m: &mut std::collections::BTreeMap<String, String>, account: &str, password: &str) {
+    m.retain(|k, _| !k.eq_ignore_ascii_case(account));
+    m.insert(account.to_ascii_lowercase(), password.into());
+}
+
+pub fn remove_cred_by_name(account: &str) -> Result<(), String> {
+    let mut m = read_creds(&creds_path())?;
+    m.retain(|k, _| !k.eq_ignore_ascii_case(account));
+    backup::login_attempt_started(account).map_err(|e| e.message)?;
+    atomic_json(&creds_path(), &m)
 }
 
 fn get_cred(account: &str) -> Option<String> {
     // 忽略大小写匹配（用户输入的账号名与 vdf 回读的 AccountName 可能大小写不同）
-    let creds = load_creds();
-    creds
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(account))
-        .map(|(_, v)| v.clone())
+    let creds = match read_creds(&creds_path()) {
+        Ok(creds) => creds,
+        Err(e) => { log("acct", "读取本地登录凭据失败", &e, false); return None; }
+    };
+    let matches: Vec<_> = creds.iter().filter(|(k, _)| k.eq_ignore_ascii_case(account)).collect();
+    if matches.len() > 1 {
+        log("acct", "本地账号有重复凭据", "请在新增登录栏重新输入最新密码，保存后将自动合并大小写重复项", false);
+        return None;
+    }
+    matches.first().map(|(_, v)| (*v).clone())
 }
 
 // ---------------- 核心功能（合同 pub API） ----------------
@@ -1353,10 +1408,11 @@ pub fn current_account_sid3() -> Option<String> {
 }
 
 /// 切换账号（列表"登录"）：杀 Steam → vdf/注册表指向目标 → 启动 steam.exe →
-/// **凭据直登**（Data\accounts.json 有该账号密码 → `-login 账号 密码` 参数登录，100% 成功；
+/// **凭据直登**（Data\accounts.json 有该账号密码 → `-login 账号 密码` 参数登录；
 /// 无凭据 → 无参启动走 Steam 自动登录，凭据时效内有效）→ 轮询该账号 Timestamp 更新确认登录完成。
 pub fn switch(sid64: &str) -> Result<String, String> {
     let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/delete/login_new 互斥
+    let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let root = steam_root_or_err()?;
     // ── 提速（2026-09-29）：目标就是当前运行中且已登录的账号 → 免杀免启直接返回
     //（手滑重选自己不再白付一轮 Steam 退出+重启+登录）──
@@ -1364,10 +1420,21 @@ pub fn switch(sid64: &str) -> Result<String, String> {
         let cur_sid3 = current_account_sid3().unwrap_or_default();
         if !cur_sid3.is_empty() && sid3_to_id64(&cur_sid3).as_deref() == Some(sid64) {
             if let Some(acc) = accounts_list_v().into_iter().find(|a| a.steam_id64 == sid64) {
-                return Ok(display_name(&acc.persona_name, &acc.account_name));
+                if let Some(pass) = get_cred(&acc.account_name) {
+                    if backup::is_login_confirmed(&acc.account_name, &pass) {
+                        backup::confirmed_login(&acc.account_name, &pass, "列表登录");
+                        return Ok(display_name(&acc.persona_name, &acc.account_name));
+                    }
+                    // 当前会话不能证明旧文件里的密码正确，需重新发起凭据登录。
+                } else {
+                    backup::missing_password();
+                    return Ok(display_name(&acc.persona_name, &acc.account_name));
+                }
             }
         }
     }
+    let before = parse_vdf(&read_vdf(&root)?);
+    if !before.iter().any(|a| a.sid64 == sid64) { return Err("账号不存在，请刷新账号列表".into()); }
     kill_and_wait()?;
     let mut accounts = parse_vdf(&read_vdf(&root)?);
     let idx = accounts
@@ -1395,23 +1462,26 @@ pub fn switch(sid64: &str) -> Result<String, String> {
 
     // ── 第 1 层（2026-09-29 调序）：有保存凭据 → 直接凭据直登。-login 立即自动
     // 提交，不再先无参启动等 Steam 慢速自动登录（实测会在密码页停留 ~10s 才续上
-    // 缓存会话）。20s 未确认（Steam 更新/慢网络）不重试不报错——凭据已提交，
-    // Steam 会自行完成，强杀重启反而打断
+    // 缓存会话）。20s 未确认时明确提示尚未登录，并后台等待晚到成功；确认前不备份。
     if let Some(pass) = get_cred(&account_name) {
+        backup::login_attempt_started(&account_name).map_err(|e| e.message)?;
         launch_steam(&root, &["-login", account_name.as_str(), pass.as_str()])?;
         for _ in 0..100 {
             thread::sleep(Duration::from_millis(200));
             if login_confirmed(&root, sid64, before_ts) {
+                backup::confirmed_login(&account_name, &pass, "列表登录");
                 return Ok(display);
             }
         }
-        return Ok(display);
+        watch_switch_login(root, account_name, pass, before_ts, generation);
+        return Err(format!("{display}：登录尚未确认，暂不备份；完成 Steam 验证后会自动同步"));
     }
 
     // ── 第 2 层：无凭据 → 无参启动走 Steam 自带自动登录（与客户端下拉选历史账号
     // 同一机制，凭据时效内有效）。窗口 20s：Steam 冷启动/慢网络可 >8s，过短会把
     // "载入中"误判为失败（2026-09-20 用户实测反馈）──
     launch_steam(&root, &[])?;
+    backup::missing_password();
     for _ in 0..100 {
         thread::sleep(Duration::from_millis(200));
         if login_confirmed(&root, sid64, before_ts) {
@@ -1427,11 +1497,42 @@ pub fn switch(sid64: &str) -> Result<String, String> {
 fn login_confirmed(root: &str, sid64: &str, before_ts: i64) -> bool {
     if let Ok(text) = read_vdf(root) {
         if let Some(acc) = parse_vdf(&text).iter().find(|a| a.sid64 == sid64) {
-            let ts: i64 = field(acc, "Timestamp").and_then(|v| v.parse().ok()).unwrap_or(0);
-            return ts > before_ts;
+            return login_observed(&to_account(acc), is_steam_running(), registry_autologin_user().as_deref(),
+                field(acc, "AccountName").unwrap_or(""), before_ts);
         }
     }
     false
+}
+
+fn login_observed(account: &SteamAccount, running: bool, current: Option<&str>, target: &str, baseline: i64) -> bool {
+    running && !target.is_empty() && account.account_name.eq_ignore_ascii_case(target)
+        && current.is_some_and(|name| name.eq_ignore_ascii_case(target))
+        && account.timestamp > baseline
+}
+
+fn confirmed_account(target: &str, baseline: i64) -> Option<SteamAccount> {
+    let running = is_steam_running();
+    let current = registry_autologin_user();
+    accounts_list_v().into_iter().find(|acc| login_observed(acc, running, current.as_deref(), target.trim(), baseline))
+}
+
+fn watch_switch_login(root: String, account: String, password: String, baseline: i64, generation: u64) {
+    let _ = thread::Builder::new().name("switch-late-confirm".into()).spawn(move || {
+        for _ in 0..300 {
+            thread::sleep(Duration::from_secs(2));
+            if STEAM_GENERATION.load(Ordering::SeqCst) != generation { return; }
+            let Some(acc) = confirmed_account(&account, baseline) else { continue; };
+            let _steam_op = STEAM_OP.lock().unwrap();
+            if STEAM_GENERATION.load(Ordering::SeqCst) != generation
+                || !login_confirmed(&root, &acc.steam_id64, baseline) { return; }
+            backup::confirmed_login(&account, &password, "列表登录确认");
+            log("acct", "Steam 登录确认", "登录已确认，已按备份设置处理", true);
+            return;
+        }
+        if STEAM_GENERATION.load(Ordering::SeqCst) == generation {
+            log("acct", "Steam 登录未确认", "未获得本次登录成功记录，密码没有加入 NAS 上传队列", false);
+        }
+    });
 }
 
 /// 删除账号（R18 全链路自动化）：Steam 运行中 → 强杀 + 等完全退出（≤10s，超时 Err；
@@ -1440,14 +1541,11 @@ fn login_confirmed(root: &str, sid64: &str, before_ts: i64) -> bool {
 /// 被删的正是当前账号时无参启动回选择页属预期；否则直登恢复原会话）→ Ok(显示名)。
 pub fn delete(sid64: &str) -> Result<String, String> {
     let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/switch/login_new 互斥
+    STEAM_GENERATION.fetch_add(1, Ordering::SeqCst);
     let root = steam_root_or_err()?;
     // 杀 Steam 前锁定当前账号名（Steam 退出过程会临时清掉注册表 AutoLoginUser），
     // 重启用它凭据直登恢复会话；被删的若是它则凭据已删，自然退化为无参启动
     let autologin_before = registry_autologin_user().unwrap_or_default();
-    let was_running = kill_steam_if_running();
-    if was_running && !wait_steam_exit(10) {
-        return Err("Steam 未能在 10 秒内完全退出，请手动退出后再删除账号".to_string());
-    }
     let mut accounts = parse_vdf(&read_vdf(&root)?);
     let idx = accounts
         .iter()
@@ -1459,13 +1557,23 @@ pub fn delete(sid64: &str) -> Result<String, String> {
     if account_name.is_empty() {
         return Err("该账号缺少 AccountName 字段，loginusers.vdf 可能已损坏".to_string());
     }
-    write_vdf(&root, &accounts)?;
+    let was_running = kill_steam_if_running();
+    if was_running && !wait_steam_exit(10) {
+        return Err("Steam 未能在 10 秒内完全退出，请手动退出后再删除账号".to_string());
+    }
+    if let Err(e) = write_vdf(&root, &accounts) {
+        if was_running { relaunch_with_cred(&root, &autologin_before); }
+        return Err(e);
+    }
     // 同步删除保存的登录凭据（完全清理的一部分）
-    remove_cred_by_name(&account_name);
+    let mut cleanup_errors = Vec::new();
+    if let Err(e) = remove_cred_by_name(&account_name) { cleanup_errors.push(e); }
     // 删除该账号的 userdata 目录（含 localconfig.vdf 等）；不存在或删除失败不阻断流程
     if let Some(sid3) = sid64_to_sid3(sid64) {
         let ud = Path::new(&root).join("userdata").join(&sid3);
-        let _ = fs::remove_dir_all(ud);
+        if let Err(e) = fs::remove_dir_all(ud) {
+            if e.kind() != std::io::ErrorKind::NotFound { cleanup_errors.push(format!("账号数据目录删除失败：{e}")); }
+        }
     }
     // 删除前 Steam 在运行 → 自动重启：被删的正是当前账号则无参启动（回选择页属预期），
     // 否则凭据直登恢复原会话
@@ -1476,6 +1584,9 @@ pub fn delete(sid64: &str) -> Result<String, String> {
             autologin_before.as_str()
         };
         relaunch_with_cred(&root, target);
+    }
+    if !cleanup_errors.is_empty() {
+        return Err(format!("账号已从 Steam 列表移除，但部分清理未完成：{}", cleanup_errors.join("；")));
     }
     Ok(display_name(&persona_name, &account_name))
 }
@@ -1489,28 +1600,28 @@ pub fn delete(sid64: &str) -> Result<String, String> {
 /// 凭据提前保存 + 180s 窗口：新账号首次登录常需 SteamGuard 邮箱验证码，超时也不丢密码，
 /// 列表「登录」永远可兜底。（Steam 运行中不写 vdf——会被退出回写覆盖；RememberPassword
 /// 由串联的 cover 在退出后补写）
-pub fn login_new_locked(account: &str, password: &str) -> Result<String, String> {
+pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> Result<String, String> {
     let account = account.trim();
-    if account.is_empty() {
-        return Err("账号名不能为空".to_string());
+    if account.is_empty() || password.is_empty() || account.contains(['\r', '\n', '\0']) || password.contains(['\r', '\n', '\0']) {
+        return Err("账号和密码不能为空或含换行".to_string());
     }
     let root = steam_root_or_err()?;
+    save_cred_by_name(account, password)?;
     kill_and_wait()?;
+    *before_ts = accounts_list_v().into_iter().filter(|a| a.account_name.eq_ignore_ascii_case(account))
+        .map(|a| a.timestamp).max().unwrap_or(0);
     registry_set_autologin_user(account)?;
-    save_cred_by_name(account, password);
     launch_steam(&root, &["-login", account, password])?;
     for _ in 0..900 {
         thread::sleep(Duration::from_millis(200));
-        if let Some(acc) = accounts_list_v()
-            .into_iter()
-            .find(|a| a.account_name.eq_ignore_ascii_case(account))
-        {
+        if let Some(acc) = confirmed_account(account, *before_ts) {
+            backup::confirmed_login(account, password, "新增登录确认");
             return Ok(display_name(&acc.persona_name, &acc.account_name));
         }
     }
     // 2026-09-29 文案修正：超时≠失败——Steam 可能正在自更新/等待验证码/慢网络，
     // 不预设单一原因；后台看护（见 login_new command）会在晚到成功时自动补覆盖
-    Err("登录确认超时：Steam 可能正在更新或等待验证码，完成后会自动进入并补覆盖配置；若长时间停在登录页，点列表「登录」自动重试（密码已保存）".to_string())
+    Err("登录确认超时：Steam 可能正在更新或等待验证码，密码仅在本地保存，尚未备份；完成后会自动补覆盖配置并同步。若长时间停在登录页，请重试或修正密码".to_string())
 }
 
 // ---------------- Tauri 命令：统一在文件尾 mod commands（成功写日志 + 推 "steam-accounts-changed"） ----------------
@@ -1822,7 +1933,7 @@ fn auto_install_flow(tx: &Sender<BgMsg>, ctx: &egui::Context) -> Result<(), Stri
         file.write_all(&buf[..n])
             .map_err(|e| format!("写入临时文件失败：{e}"))?;
         done += n as u64;
-        let due = last_push.map_or(true, |t| t.elapsed() >= Duration::from_millis(120));
+        let due = last_push.is_none_or(|t| t.elapsed() >= Duration::from_millis(120));
         if due {
             last_push = Some(Instant::now());
             notify(tx, ctx, BgMsg::DownloadProgress { done, total });
@@ -2221,6 +2332,18 @@ mod commands {
     use super::*;
 
 #[tauri::command]
+pub fn backup_get() -> Result<backup::Snapshot, backup::Error> { backup::get() }
+
+#[tauri::command]
+pub fn backup_save(config: backup::Config) -> Result<backup::Snapshot, backup::Error> { backup::save(config) }
+
+#[tauri::command]
+pub async fn backup_test(config: backup::Config) -> Result<backup::TestReport, backup::Error> { backup::test(config).await }
+
+#[tauri::command]
+pub async fn backup_sync() -> Result<backup::Snapshot, backup::Error> { backup::sync(true).await }
+
+#[tauri::command]
 pub fn get_status() -> AppStatus {
     let s = load_settings();
     let lol_root = s.lol_root.clone().unwrap_or_default();
@@ -2241,9 +2364,70 @@ pub fn get_status() -> AppStatus {
     }
 }
 
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn local_duplicates_are_replaced_with_latest_password() {
+        let mut creds = std::collections::BTreeMap::from([
+            ("Player".into(), "old".into()), ("PLAYER".into(), "older".into()), ("other".into(), "keep".into())]);
+        replace_credential(&mut creds, "player", " latest password ");
+        assert_eq!(creds.len(), 2);
+        assert_eq!(creds["player"], " latest password ");
+        assert_eq!(creds["other"], "keep");
+    }
+
+    #[test]
+    fn atomic_storage_round_trip_and_corrupt_credentials() {
+        let dir = std::env::temp_dir().join(format!("gameready-store-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("accounts.json");
+        let mut creds = std::collections::BTreeMap::new();
+        replace_credential(&mut creds, "player", "one");
+        atomic_json(&path, &creds).unwrap();
+        replace_credential(&mut creds, "PLAYER", "two");
+        atomic_json(&path, &creds).unwrap();
+        assert_eq!(read_creds(&path).unwrap()["player"], "two");
+        fs::write(&path, b"{broken").unwrap();
+        assert!(read_creds(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"{broken");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_file(path).unwrap(); fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn older_settings_have_usable_defaults_and_vdf_preserves_fields() {
+        let settings: Settings = serde_json::from_str(r#"{"global_cover_on":true}"#).unwrap();
+        assert!(settings.global_cover_on); assert_eq!(settings.close_behavior, "tray");
+        assert_eq!(settings.accent, "#00e5ff");
+        let text = "\u{feff}\"users\"\r\n{\r\n\"76561197960265729\"\r\n{\r\n\"AccountName\" \"fixture\"\r\n\"Timestamp\" \"100\"\r\n\"FutureField\" \"keep\"\r\n}\r\n}\r\n";
+        let accounts = parse_vdf(text);
+        assert_eq!(accounts.len(), 1); assert_eq!(field(&accounts[0], "Timestamp"), Some("100"));
+        let reparsed = parse_vdf(&build_vdf(&accounts));
+        assert_eq!(field(&reparsed[0], "FutureField"), Some("keep"));
+        assert_eq!(sid64_to_sid3(&accounts[0].sid64).as_deref(), Some("1"));
+        assert!(sid64_to_sid3("invalid").is_none());
+    }
+
+    #[test]
+    fn login_confirmation_requires_new_timestamp_and_active_matching_account() {
+        let mut account = SteamAccount { steam_id64: "76561197960265729".into(), account_name: "player".into(),
+            persona_name: String::new(), auto_login: true, timestamp: 100 };
+        assert!(!login_observed(&account, true, Some("player"), "player", 100));
+        account.timestamp = 101;
+        assert!(login_observed(&account, true, Some("PLAYER"), "player", 100));
+        assert!(!login_observed(&account, false, Some("player"), "player", 100));
+        assert!(!login_observed(&account, true, Some("other"), "player", 100));
+        assert!(!login_observed(&account, true, None, "player", 100));
+        assert!(!login_observed(&account, true, Some("player"), "other", 100));
+    }
+}
+
 
 #[tauri::command]
 pub fn set_paths(lol_root: String, steam_root: String) -> Result<AppStatus, String> {
+    let _settings = SETTINGS_OP.lock().unwrap();
     let lol = lol_root.trim().to_string();
     let steam = steam_root.trim().to_string();
     let valid = validate_roots(&lol, &steam);
@@ -2252,32 +2436,41 @@ pub fn set_paths(lol_root: String, steam_root: String) -> Result<AppStatus, Stri
             "两个路径下均未找到 LeagueClient.exe / steam.exe（LOL：{lol}，Steam：{steam}），请重新选择"
         ));
     }
-    let mut s = load_settings();
+    let mut s = checked_settings()?;
     // 只保存各自校验有效的项：无效路径不落盘（避免重启后路径条指向无效目录、
     // 覆盖/守护在错误根目录下 create_dir_all 长出垃圾文件树）
     if !lol.is_empty() && valid.lol {
         s.lol_root = Some(lol);
     }
     if !steam.is_empty() && valid.steam {
+        if s.steam_root.as_deref() != Some(steam.as_str()) { STEAM_GENERATION.fetch_add(1, Ordering::SeqCst); }
         s.steam_root = Some(steam);
     }
-    save_settings(&s);
-    Ok(get_status())
+    save_settings(&s)?;
+    let mut status = get_status();
+    status.paths_valid = valid;
+    Ok(status)
 }
 
 
 #[tauri::command]
-pub fn get_settings() -> Settings {
-    load_settings()
+pub fn get_settings() -> Result<Settings, String> {
+    checked_settings()
 }
 
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn set_settings(mut settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
-    let cur = load_settings();
-    settings.lol_root = cur.lol_root;
-    settings.steam_root = cur.steam_root;
-    save_settings(&settings);
+    let _settings = SETTINGS_OP.lock().unwrap();
+    let cur = checked_settings()?;
+    if !matches!(settings.close_behavior.as_str(), "tray" | "exit") {
+        return Err("关闭行为必须为 tray 或 exit".into());
+    }
+    if settings.accent.len() != 7 || !settings.accent.starts_with('#') || !settings.accent[1..].bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("强调色必须为 #RRGGBB".into());
+    }
+    settings.lol_root = cur.lol_root.clone();
+    settings.steam_root = cur.steam_root.clone();
 
     // 开机自启：同步到系统启动项
     #[cfg(target_os = "windows")]
@@ -2296,6 +2489,12 @@ pub fn set_settings(mut settings: Settings, app: tauri::AppHandle) -> Result<(),
         if let Err(e) = r {
             return Err(format!("设置开机自启动失败：{e}"));
         }
+    }
+    if let Err(e) = save_settings(&settings) {
+        use tauri_plugin_autostart::ManagerExt;
+        let auto = app.autolaunch();
+        let _ = if cur.autostart { auto.enable() } else { auto.disable() };
+        return Err(e);
     }
     Ok(())
 }
@@ -2316,7 +2515,7 @@ pub fn open_data_dir() -> Result<(), String> {
 pub fn list_logs(filter: String) -> Vec<LogEntry> {
     let mut out: Vec<LogEntry> = Vec::new();
     if let Ok(f) = File::open(logs_path()) {
-        for line in BufReader::new(f).lines().flatten() {
+        for line in BufReader::new(f).lines().map_while(Result::ok) {
             // 单行损坏（如断电截断）跳过，不影响其余条目
             if let Ok(e) = serde_json::from_str::<LogEntry>(&line) {
                 if filter == "all" || filter.is_empty() || e.kind == filter {
@@ -2325,7 +2524,7 @@ pub fn list_logs(filter: String) -> Vec<LogEntry> {
             }
         }
     }
-    out.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+    out.sort_by_key(|a| std::cmp::Reverse(a.ts_ms));
     out
 }
 
@@ -2334,6 +2533,7 @@ pub fn list_logs(filter: String) -> Vec<LogEntry> {
 pub async fn steam_cover(include_global: bool, app: tauri::AppHandle) -> Result<CoverReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 switch/delete/login_new 互斥
+        STEAM_GENERATION.fetch_add(1, Ordering::SeqCst);
         cover_locked(include_global, app)
     })
     .await
@@ -2395,14 +2595,16 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
     let handle = {
         let mut g = cell.lock().unwrap();
         match g.take() {
-            Some(h) => h,
+            Some(h) => {
+                h.stop_flag.store(true, Ordering::SeqCst);
+                set_guard_running(false);
+                h
+            },
             None => return Err("LOL 守护未在运行".to_string()),
         }
     }; // 锁在此释放：线程自停时要拿同一把锁清理，join 前绝不能持锁（防死锁）
 
-    handle.stop_flag.store(true, Ordering::SeqCst);
     let _ = handle.thread.join();
-    set_guard_running(false);
 
     let summary = GuardSummary {
         count: handle.count.load(Ordering::SeqCst),
@@ -2468,7 +2670,10 @@ pub async fn login_new(account: String, password: String, app: AppHandle) -> Res
         // 全程持锁且登录→覆盖之间不释放（2026-09-28 修复：此前覆盖阶段实际无锁，
         // 窗口期与 switch/delete/steam_cover 并发会互踩杀启 Steam 与 vdf 写入）
         let _steam_op = STEAM_OP.lock().unwrap();
-        let name = match login_new_locked(&account, &password) {
+        let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut before_ts = accounts_list_v().into_iter().filter(|a| a.account_name.eq_ignore_ascii_case(account.trim()))
+            .map(|a| a.timestamp).max().unwrap_or(0);
+        let name = match login_new_locked(&account, &password, &mut before_ts) {
             Ok(n) => n,
             Err(e) => {
                 // 2026-09-29 晚到确认看护：超时≠失败（Steam 可能正在自更新/慢网络）。
@@ -2476,21 +2681,24 @@ pub async fn login_new(account: String, password: String, app: AppHandle) -> Res
                 // 与即时成功路径等效；期间用户手动重试也不冲突（STEAM_OP 串行）。
                 if e.contains("登录确认超时") {
                     let acct = account.clone();
+                    let pass = password.clone();
                     let app3 = app2.clone();
                     let _ = thread::Builder::new()
                         .name("login-late-confirm".to_string())
                         .spawn(move || {
                             for _ in 0..300 {
                                 thread::sleep(Duration::from_secs(2));
-                                let Some(acc) = accounts_list_v()
-                                    .into_iter()
-                                    .find(|a| a.account_name.eq_ignore_ascii_case(&acct))
+                                if STEAM_GENERATION.load(Ordering::SeqCst) != generation { return; }
+                                let Some(acc) = confirmed_account(&acct, before_ts)
                                 else {
                                     continue;
                                 };
                                 let display = display_name(&acc.persona_name, &acc.account_name);
                                 let include_global = load_settings().global_cover_on;
                                 let _steam_op = STEAM_OP.lock().unwrap();   // 与常规 Steam 操作串行
+                                if STEAM_GENERATION.load(Ordering::SeqCst) != generation
+                                    || confirmed_account(&acct, before_ts).is_none() { return; }
+                                backup::confirmed_login(&acct, &pass, "新增登录确认");
                                 let note = match cover_locked(include_global, app3.clone()) {
                                     Ok(rep) => {
                                         format!("，已自动补覆盖配置（{}/{} 成功）", rep.ok, rep.total)

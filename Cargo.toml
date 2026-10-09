@@ -1,6 +1,6 @@
 [package]
 name = "gameready"
-version = "0.1.0"
+version = "0.1.1"
 description = "GameReady - 一键就绪 · 开局即战"
 edition = "2021"
 
@@ -31,6 +31,15 @@ sysinfo = "0.30"
 # 文件时间戳（修改/访问时间；创建时间走 windows SetFileTime）
 filetime = "0.2"
 chrono = "0.4"
+# SFTP 备份：纯 Rust SSH，免额外安装客户端或 OpenSSL DLL。
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "3.0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "net"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+rand = "0.10"
 
 [profile.release]
 opt-level = "z"
