@@ -1,60 +1,63 @@
 # GameReady
 
-一键就绪 · 开局即战 —— Windows 游戏配置便携工具。免安装单 exe，配置内嵌，拷走即用。
+Windows 游戏配置便携工具：LOL 配置守护、Steam 客户端设置与账号管理、可选 SFTP 账号备份。单 exe，无需安装；设置和运行数据保存在 exe 同级 `Data` 目录。
 
-## 功能
+## 使用
 
-- **LOL（WeGame 国服）配置守护**：点击大按钮开启，后台每 200ms 将内置配置循环覆盖到游戏目录（对抗客户端回写），再点关闭
-- **Steam 一键覆盖**：将内置配置一键覆盖到**当前登录账号**（顶部徽标实时显示覆盖进度；可选全局配置一起覆盖，覆盖时自动退出并重启 Steam）
-- **Steam 账号管理**（内嵌面板）：本地账号列表，登录/删除；登录优先历史登录态免密直登，失效时自动用保存的凭据代输（`Data\accounts.json`，自用工具明文）；新增登录 = 登录 + 自动覆盖配置一步到位（支持等待 SteamGuard 验证码）
-- **进程活跃指示**：左列游戏图标右上角绿点脉冲 = 对应客户端正在运行
-- **覆盖日志**：全部操作留痕（exe 同级 `Data\logs.jsonl`，时间降序，5000 条自动截断）
-- **WebView2 引导**：无 WebView2 的机器启动时弹原生小窗自动/手动安装，装好直接进入（无需重启）
-- 单实例防多开、系统托盘、开机自启、便携数据（全部存 exe 同级 `Data\`，拷文件夹即迁移）
+从 [Releases](https://github.com/BigdataZjk/GameReady/releases) 下载 exe 或解压 zip 后运行。没有 WebView2 时，按引导安装微软官方运行环境。在路径设置中填写需要使用的游戏安装目录，可只配置其中一个游戏。
 
-## 环境要求
+- LOL：开启守护后，每 200ms 写入内置配置；连续五轮全部失败时自动停止。
+- Steam：合并内置的快捷键、覆盖层、通知等设置；可同时合并全局设置。保留使用者原有的其他字段和账号数据，覆盖期间自动退出并重启 Steam。
+- 账号管理：列表登录、删除本机账号数据、新增登录；新增登录会保存密码并等待 SteamGuard 等登录确认，确认后自动应用设置。
+- 操作日志：保留最近 5000 条，支持分类查看；密码不写入日志。
+- 支持托盘、开机自启和单实例运行。
 
-- Rust（stable，`x86_64-pc-windows-msvc`）：<https://rustup.rs>
-- MSVC 构建工具：Visual Studio 2022 Build Tools（"使用 C++ 的桌面开发"工作负载，含 Windows SDK）
-- 前端零构建（纯静态 HTML，无需 Node）
+## 配置 Steam 账号备份
 
-## 构建
+自动备份默认关闭。开启后，通过工具登录或新增账号，只有确认 Steam 本次登录成功，才将该账号和本次密码排入本地队列并上传至配置的 NAS。提交账号密码、启动 Steam、等待验证码或登录超时都不等于成功，不会直接入队。
 
-```bash
-build.bat           # 构建并把 gameready.exe 复制到项目根目录
-build.bat clean     # 同上，并在构建后清空 target（只留根目录 exe）
+开启或保存备份配置、点击「立即同步」时，只补传有对应密码成功登录记录的历史账号。确认记录与账号名和密码摘要绑定；开始新的登录尝试会撤销旧资格，成功后重新记录。前台超时后，后台最多继续等待十分钟；晚到成功会补传，发起其他 Steam 操作或更换路径会取消旧看护。
+
+升级前保存的密码和旧队列没有成功证明，不会自动视为有效或上传。这些账号在待同步页显示「待验证登录」，点击后使用已保存密码重新登录并完成 Steam 验证；没有可用密码的账号显示「待补密码」。仅有 Steam 历史记录或当前缓存会话不能证明本地保存的密码正确。登录确认使用本次 Steam 登录记录时间增长、当前账号匹配及 Steam 运行状态；真实 Steam 行为仍需实际运行验证。
+
+1. 在 NAS 中创建备份目录，确保 SFTP 用户有读取、创建、删除临时文件、创建目录和替换文件的权限。
+2. 在 Steam 页点击「账号备份」，填写域名/IP、端口、NAS 用户名、密码，以及 SFTP 绝对文件路径（例如 `/GameReady/accounts.txt`）。端口默认 `2022`，以 NAS 实际设置为准。
+3. 点击「测试连接」。测试会在目标目录创建、替换、读回并清理随机测试文件，不修改真实账号文件。
+4. 开启「自动备份」并保存配置。配置一次即可沿用；「待同步账号」显示排队账号、来源、时间和同步结果。
+
+「账号备份」入口后显示状态图标：绿色勾表示已开启且配置验证通过，灰色表示未开启，黄色表示开启但未验证或连接异常。测试连接按钮后的绿色状态灯与「测试通过」文字表示本次测试成功；失败显示红色，修改服务器、端口、用户名、密码或路径后清除旧测试状态。验证结果绑定具体连接信息并持久保存，修改配置或同步失败后不会沿用旧的绿色状态。
+
+远程文件为 UTF-8 TXT，每行只有 `账号----密码`。账号名忽略大小写；原文件重复行取最后一行，本次同步再用新密码覆盖，所以同账号最终只保留一条。密码的首尾空格与内部 `----` 保留；不接受空凭据、换行或 NUL。
+
+网络中断、超时、写后确认失败时保留队列，自动退避重试（60、120、240 秒，之后最多间隔 300 秒）；重启程序后队列仍在。NAS 密码错误、权限不足或文件格式损坏时暂停自动重试，修正问题并保存配置或点击立即同步。已有账号没有本机保存的密码时，需要在新增登录栏补输一次。
+
+同步使用远程目录锁、唯一临时文件、读回校验与文件替换，确认后才移除本地记录。其他设备正在同步时等待；本设备中断的锁可在重试时恢复，其他设备遗留超过十分钟的锁会被恢复。NAS 必须支持文件替换；不支持时保留原文件并报告错误。
+
+首次成功登录记录 SSH 主机 SHA256 指纹，后续密钥变化会阻止连接。确认 NAS 主机密钥确已更换后，关闭程序并在 `Data/backup.json` 更新 `config.fingerprint`，再重新测试连接。
+
+## 本地数据与发行包
+
+| 文件 | 内容 |
+| --- | --- |
+| `Data/settings.json` | 游戏路径和应用设置 |
+| `Data/accounts.json` | 本机保存的 Steam 账号密码 |
+| `Data/backup.json` | SFTP 配置、登录确认摘要、待同步凭据、同步状态及重试信息 |
+| `Data/logs.jsonl` | 操作日志 |
+
+账号密码、NAS 密码及待同步凭据按明文保存。拷贝整个 `Data` 会携带这些内容；公开发行包不包含 `Data`、私人服务器配置或测试凭据。
+
+内置 Steam 模板只包含通用设置，不包含账号 ID、昵称、好友资料或会话票据。升级到 0.1.1 不会自动删除旧 Git 历史或旧发行包中的内容。
+
+## 构建与验证
+
+需要 Rust stable、MSVC C++ 构建工具和 Windows SDK。前端是静态 HTML，不需要 Node 构建；SFTP 为纯 Rust 实现，不依赖外部 SSH 客户端或 OpenSSL DLL。
+
+```powershell
+cargo test --locked --bin gameready --no-default-features
+cargo clippy --all-targets --locked -- -D warnings
+.\build.bat
 ```
 
-（等价于 `cargo build --release` + 复制 `target\release\gameready.exe`；产物约 10 MB 单文件便携）
+`build.bat` 把 `target/release/gameready.exe` 复制到项目根目录。协议测试使用本机临时 SSH/SFTP 服务和虚拟凭据，覆盖认证失败、主机密钥校验、重复合并、确认失败重试、并发锁、文件替换扩展和网络不可达；不登录真实 NAS 或 Steam 账号。
 
-直接双击 exe 运行；首次运行在 exe 同级自动创建 `Data\`（设置/日志/凭据）。
-
-## 目录结构（小而精：Rust 单文件 / 前端单文件 / 文档单文件）
-
-```
-├── src/main.rs      全部 Rust（单文件 ~2400 行，按分节注释划分：
-│                     入口/托盘 → store → logger → watcher → packs →
-│                     cover → guard → steam → guide(WebView2引导) → commands）
-├── frontend/index.html  全部前端（单文件，CSS/JS 内联，window.__TAURI__ 全局 API）
-├── packs/           内嵌配置资产（编译期打进 exe，勿改名）
-│   ├── lol/…        LOL 5 文件（Game\Config 三件套 + LeagueClient\Config 两个 yaml）
-│   └── steam/…      Steam 2 文件（config.vdf 全局 / localconfig.vdf 账号级）
-├── DESIGN.md        设计文档合订本（需求台账 R1–R23 / 覆盖映射 / 路径调研 /
-│                     WebView2 引导设计 / command 与事件速查）
-├── build.bat        一键构建（exe 直出根目录）
-├── Cargo.toml / build.rs / tauri.conf.json / capabilities/ / icons/
-```
-
-## 内置配置的更新
-
-配置包在 `packs/` 下，编译期嵌入。修改/替换其中的文件后重新 `cargo build --release` 即可。
-覆盖后的文件时间戳统一为 `2000-01-01 00:00:00`，便于识别哪些文件是本程序写入的。
-
-## 开发约定与接口速查
-
-- 源码单文件分节结构：改哪个功能看 `src/main.rs` 对应分节注释；需求演进史见 git log
-- 弹窗全部自定义（无系统 alert/confirm）；tooltip 全部 `data-tip`（无系统白条）
-- "当前登录账号" = Steam 正在运行且 AutoLoginUser 指向的账号（历史登录不算）
-- `.cargo/config.toml` = 国内 crates 镜像（rsproxy），保证 clone 后依赖可下载，勿删
-- command：`get_status / set_paths(lolRoot,steamRoot) / get_settings / set_settings(settings) / open_data_dir / start / stop / steam_cover(includeGlobal) / accounts_list / switch_account(sid64) / delete_account(sid64) / login_new(account,password) / list_logs(filter)`
-- 事件：`game-active{lol,steam} / guard-stats{count,elapsed_ms} / guard-error{message} / cover-done(CoverReport) / log-appended(LogEntry) / steam-accounts-changed`
+源码：`src/main.rs`（应用、Steam/LOL 操作）、`src/backup.rs`（备份）、`src/vdf.rs`（设置合并）、`src/backup_tests.rs`（协议测试）、`frontend/index.html`（界面）。`packs` 内的配置编译期嵌入 exe。
