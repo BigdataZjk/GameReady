@@ -214,6 +214,30 @@ async fn probe_merge_and_retry_after_lost_confirmation() {
 }
 
 #[tokio::test]
+async fn manual_unconfirmed_password_syncs_directly_and_all_skips_receipts() {
+    let f = fixture().await;
+    let remote = Remote::connect(&f.config).await.unwrap();
+    let mut store = Store::default();
+    let creds = BTreeMap::from([("player".into(), " saved ---- password ".into()), ("other".into(), "second".into())]);
+    let inventory = classify_inventory(&creds, &["missing".into()], &store.confirmed_credentials);
+    prepare_manual(&mut store, &inventory, Some("player")).unwrap();
+    assert!(store.confirmed_credentials.is_empty());
+    remote.commit("/accounts.txt", "manual-device", &store.queue).await.unwrap();
+    assert_eq!(f.files.lock().unwrap().files["/accounts.txt"], b"player---- saved ---- password \n");
+    store.acknowledge(&store.queue.clone());
+    prepare_manual(&mut store, &inventory, None).unwrap();
+    assert_eq!(store.queue.len(), 1);
+    assert_eq!(store.queue[0].account, "other");
+    remote.commit("/accounts.txt", "manual-device", &store.queue).await.unwrap();
+    store.acknowledge(&store.queue.clone());
+    let snapshot = store.snapshot_from_inventory(Ok(inventory));
+    assert!(snapshot.queue.is_empty() && snapshot.unconfirmed_password_accounts.is_empty());
+    assert_eq!(snapshot.missing_password_accounts, vec!["missing"]);
+    assert_eq!(f.files.lock().unwrap().files["/accounts.txt"], b"other----second\nplayer---- saved ---- password \n");
+    remote.close().await;
+}
+
+#[tokio::test]
 async fn failed_replace_and_partial_reads_preserve_original() {
     let f = fixture().await;
     let original = b"user----original\n".to_vec();

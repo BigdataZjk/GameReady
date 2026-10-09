@@ -4,6 +4,9 @@ version = "0.1.1"
 description = "GameReady - 一键就绪 · 开局即战"
 edition = "2021"
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
