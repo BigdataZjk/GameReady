@@ -2,7 +2,7 @@
 param([switch]$Clean)
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$projectRoot = $PSScriptRoot
 $oldEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
 Push-Location $projectRoot
 try {

@@ -469,7 +469,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.2</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.3</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -624,7 +624,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.2</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.3</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -1799,11 +1799,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.2';
+  let v = '0.1.3';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.2 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.3 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();
