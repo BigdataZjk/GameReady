@@ -1993,7 +1993,7 @@ content = '''
 {
 	"system"
 	{
-		"EnableGameOverlay"		"0"
+		"EnableGameOverlay"		"1"
 		"InGameOverlayRestoreBrowserTabs"		"0"
 	}
 	"Software"
@@ -2019,7 +2019,7 @@ content = '''
 {
 	"system"
 	{
-		"EnableGameOverlay"		"0"
+		"EnableGameOverlay"		"1"
 		"InGameOverlayRestoreBrowserTabs"		"0"
 		"PushToTalkKey"		"0"
 		"InGameOverlayShortcutKey"		"KEY_NONE"
