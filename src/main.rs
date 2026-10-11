@@ -814,7 +814,7 @@ fn disable_overlay_scaling(registry: &RegKey) -> CoverResult {
 }
 
 /// 调用方持 STEAM_OP：退出 Steam、合并配置，再凭据直登恢复原账号。
-pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Result<CoverReport, String> {
+pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle, expected_sid64: Option<&str>) -> Result<CoverReport, String> {
     // ⓪ 用户语义（2026-09-20 修正）：覆盖只针对**正在运行且已登录**的 Steam——
     // Steam 没开就不存在"当前账号会话"，覆盖无从谈起
     if !is_steam_running() {
@@ -833,6 +833,7 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
     // ② 当前账号 SteamID3（定位 userdata\<SID3> 目录）
     let sid3 = current_account_sid3()
         .ok_or_else(|| "未检测到已登录的 Steam 账号，无法覆盖账号配置".to_string())?;
+    validate_cover_account(&sid3, expected_sid64)?;
 
     // ②b 提前（杀 Steam 前）锁定「当前账号名」，供 ③ 补写与 ⑥ 凭据直登使用。
     // 退出后再读注册表不可靠：Steam 退出/重启过程会临时清空 AutoLoginUser
@@ -1362,13 +1363,11 @@ pub fn current_account_sid3() -> Option<String> {
     sid64_to_sid3(&acc.steam_id64)
 }
 
-/// 串行切换账号；保存的密码优先，确认本次登录后才允许自动备份。
-pub fn switch(sid64: &str) -> Result<String, String> {
-    let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 cover/delete/login_new 互斥
+/// 调用方持 STEAM_OP，登录与后续覆盖之间不能释放锁。
+fn switch_locked(sid64: &str, app: AppHandle) -> Result<SteamAccount, String> {
     let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let root = steam_root_or_err()?;
-    // ── 提速（2026-09-29）：目标就是当前运行中且已登录的账号 → 免杀免启直接返回
-    //（手滑重选自己不再白付一轮 Steam 退出+重启+登录）──
+    // 已确认的当前账号跳过重复登录，调用方仍会应用配置。
     if is_steam_running() {
         let cur_sid3 = current_account_sid3().unwrap_or_default();
         if !cur_sid3.is_empty() && sid3_to_id64(&cur_sid3).as_deref() == Some(sid64) {
@@ -1376,12 +1375,12 @@ pub fn switch(sid64: &str) -> Result<String, String> {
                 if let Some(pass) = get_cred(&acc.account_name) {
                     if backup::is_login_confirmed(&acc.account_name, &pass) {
                         backup::confirmed_login(&acc.account_name, &pass, "列表登录");
-                        return Ok(display_name(&acc.persona_name, &acc.account_name));
+                        return Ok(acc);
                     }
                     // 当前会话不能证明旧文件里的密码正确，需重新发起凭据登录。
                 } else {
                     backup::missing_password();
-                    return Ok(display_name(&acc.persona_name, &acc.account_name));
+                    return Ok(acc);
                 }
             }
         }
@@ -1423,17 +1422,11 @@ pub fn switch(sid64: &str) -> Result<String, String> {
             thread::sleep(Duration::from_millis(200));
             if login_confirmed(&root, sid64, before_ts) {
                 backup::confirmed_login(&account_name, &pass, "列表登录");
-                return Ok(display);
+                return Ok(to_account(&accounts[idx]));
             }
         }
-        watch_login(account_name, pass, before_ts, generation, "列表登录确认", |confirmed| {
-            if confirmed.is_some() {
-                log("acct", "Steam 登录确认", "登录已确认，已按备份设置处理", true);
-            } else {
-                log("acct", "Steam 登录未确认", "未获得本次登录成功记录，密码没有加入 NAS 上传队列", false);
-            }
-        });
-        return Err(format!("{display}：登录尚未确认，暂不备份；完成 Steam 验证后会自动同步"));
+        watch_login(account_name, Some(pass), before_ts, generation, "列表登录确认", app);
+        return Err(format!("{display}：登录尚未确认；完成 Steam 验证后会自动覆盖配置并按设置同步"));
     }
 
     // ── 第 2 层：无凭据 → 无参启动走 Steam 自带自动登录（与客户端下拉选历史账号
@@ -1444,12 +1437,12 @@ pub fn switch(sid64: &str) -> Result<String, String> {
     for _ in 0..100 {
         thread::sleep(Duration::from_millis(200));
         if login_confirmed(&root, sid64, before_ts) {
-            return Ok(display);
+            return Ok(to_account(&accounts[idx]));
         }
     }
 
-    // ── 第 3 层：自动登录也未成（从未保存过密码/Steam 凭据过期）→ 明确要求补输一次 ──
-    Err(format!("{display}：需在 Steam 输一次密码"))
+    watch_login(account_name, None, before_ts, generation, "列表登录确认", app);
+    Err(format!("{display}：请在 Steam 完成登录，确认成功后会自动覆盖配置；本地无密码，暂不备份"))
 }
 
 /// 登录成功判据：loginusers.vdf 中该账号的 Timestamp 比 before 新
@@ -1475,24 +1468,65 @@ fn confirmed_account(target: &str, baseline: i64) -> Option<SteamAccount> {
     accounts_list_v().into_iter().find(|acc| login_observed(acc, running, current.as_deref(), target.trim(), baseline))
 }
 
-/// Shared late-login watcher. Confirm again under STEAM_OP before backup or covering settings.
-fn watch_login(account: String, password: String, baseline: i64, generation: u64, source: &'static str,
-    on_result: impl FnOnce(Option<SteamAccount>) + Send + 'static) {
+fn pending_login_matches(expected_generation: u64, generation: u64, password: Option<&str>, saved: Option<&str>) -> bool {
+    expected_generation == generation && password.is_none_or(|password| saved == Some(password))
+}
+
+/// 晚到确认与即时确认走同一覆盖流程；无本地密码时只覆盖，不加入 NAS 密码队列。
+fn watch_login(account: String, password: Option<String>, baseline: i64, generation: u64, source: &'static str, app: AppHandle) {
     let _ = thread::Builder::new().name("login-late-confirm".into()).spawn(move || {
         for _ in 0..300 {
             thread::sleep(Duration::from_secs(2));
             if STEAM_GENERATION.load(Ordering::SeqCst) != generation { return; }
             if confirmed_account(&account, baseline).is_none() { continue; }
             let _steam_op = STEAM_OP.lock().unwrap();
-            if STEAM_GENERATION.load(Ordering::SeqCst) != generation
-                || get_cred(&account).as_deref() != Some(password.as_str()) { return; }
+            if !pending_login_matches(generation, STEAM_GENERATION.load(Ordering::SeqCst),
+                password.as_deref(), get_cred(&account).as_deref()) { return; }
             let Some(acc) = confirmed_account(&account, baseline) else { return; };
-            backup::confirmed_login(&account, &password, source);
-            on_result(Some(acc));
+            if let Some(password) = &password { backup::confirmed_login(&account, password, source); }
+            finish_login(acc, app);
             return;
         }
-        if STEAM_GENERATION.load(Ordering::SeqCst) == generation { on_result(None); }
+        if STEAM_GENERATION.load(Ordering::SeqCst) == generation {
+            let result = LoginResult { name: account.clone(), ok: false,
+                message: format!("{account}：10 分钟内仍未确认登录成功，尚未覆盖配置，请重新登录") };
+            log("acct", source, &result.message, false);
+            let _ = app.emit("steam-login-finished", result);
+        }
     });
+}
+
+fn validate_cover_account(sid3: &str, expected_sid64: Option<&str>) -> Result<(), String> {
+    if expected_sid64.is_some_and(|expected| sid3_to_id64(sid3).as_deref() != Some(expected)) {
+        return Err("当前 Steam 账号已变化，已取消本次自动覆盖，请重新登录目标账号".into());
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Clone)]
+pub struct LoginResult { pub name: String, pub message: String, pub ok: bool }
+
+impl LoginResult {
+    fn from_cover(name: String, cover: Result<CoverReport, String>) -> Self {
+        let (ok, note) = match cover {
+            Ok(report) if report.failed.is_empty() && report.ok == report.total =>
+                (true, format!("配置覆盖完成（{}/{}）", report.ok, report.total)),
+            Ok(report) => (false, format!("配置覆盖未完成（{}/{}，详见日志）", report.ok, report.total)),
+            Err(error) => (false, format!("配置覆盖未完成：{error}")),
+        };
+        Self { message: format!("已登录 {name}，{note}"), name, ok }
+    }
+}
+
+/// 调用方持 STEAM_OP，确保确认登录后始终覆盖同一目标账号。
+fn finish_login(account: SteamAccount, app: AppHandle) -> LoginResult {
+    let name = display_name(&account.persona_name, &account.account_name);
+    let result = LoginResult::from_cover(name,
+        cover_locked(load_settings().global_cover_on, app.clone(), Some(&account.steam_id64)));
+    log("acct", "Steam 登录与配置", &result.message, result.ok);
+    let _ = app.emit("steam-accounts-changed", ());
+    let _ = app.emit("steam-login-finished", result.clone());
+    result
 }
 
 /// 只清理本机账号与 userdata；强杀避免退出回写复活账号，必要时恢复原会话。
@@ -1549,7 +1583,7 @@ pub fn delete(sid64: &str) -> Result<String, String> {
 }
 
 /// 调用方持 STEAM_OP：本地保存密码并登录，最多等 180 秒；超时后由后台继续确认。
-pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> Result<String, String> {
+pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> Result<SteamAccount, String> {
     let account = account.trim();
     if account.is_empty() || password.is_empty() || account.contains(['\r', '\n', '\0']) || password.contains(['\r', '\n', '\0']) {
         return Err("账号和密码不能为空或含换行".to_string());
@@ -1565,7 +1599,7 @@ pub fn login_new_locked(account: &str, password: &str, before_ts: &mut i64) -> R
         thread::sleep(Duration::from_millis(200));
         if let Some(acc) = confirmed_account(account, *before_ts) {
             backup::confirmed_login(account, password, "新增登录确认");
-            return Ok(display_name(&acc.persona_name, &acc.account_name));
+            return Ok(acc);
         }
     }
     // 2026-09-29 文案修正：超时≠失败——Steam 可能正在自更新/等待验证码/慢网络，
@@ -2191,6 +2225,38 @@ mod regression_tests {
     use super::*;
 
     #[test]
+    fn login_result_reports_cover_success_partial_failure_and_start_failure() {
+        let mut report = CoverReport { total: 2, ok: 2, failed: Vec::new(), skipped_reason: None, auto_restarted: true };
+        let complete = LoginResult::from_cover("player".into(), Ok(report.clone()));
+        assert!(complete.ok && complete.message.contains("配置覆盖完成（2/2）"));
+        report.ok = 1;
+        report.failed.push(CoverResult { rel: "localconfig.vdf".into(), ok: false, err: Some("access denied".into()) });
+        let partial = LoginResult::from_cover("player".into(), Ok(report));
+        assert!(!partial.ok && partial.message.contains("已登录 player，配置覆盖未完成（1/2"));
+        let failed = LoginResult::from_cover("player".into(), Err("当前账号已变化".into()));
+        assert!(!failed.ok && failed.message.contains("当前账号已变化"));
+    }
+
+    #[test]
+    fn automatic_cover_rejects_a_different_account_before_writing() {
+        assert!(validate_cover_account("1", Some("76561197960265729")).is_ok());
+        assert!(validate_cover_account("2", Some("76561197960265729")).is_err());
+        assert!(validate_cover_account("invalid", Some("76561197960265729")).is_err());
+        assert!(validate_cover_account("2", None).is_ok()); // 手动覆盖使用当前账号
+    }
+
+    #[test]
+    fn late_login_is_cancelled_by_new_operations_or_replaced_passwords() {
+        assert!(pending_login_matches(7, 7, Some("saved"), Some("saved")));
+        assert!(!pending_login_matches(7, 8, Some("saved"), Some("saved")));
+        assert!(!pending_login_matches(7, 7, Some("saved"), Some("changed")));
+        assert!(!pending_login_matches(7, 7, Some("saved"), None));
+        assert!(pending_login_matches(7, 7, None, None)); // Steam 缓存登录可自动覆盖
+        assert!(pending_login_matches(7, 7, None, Some("unverified"))); // 但不验证或同步新补的密码
+        assert!(!pending_login_matches(7, 8, None, None));
+    }
+
+    #[test]
     fn embedded_steam_templates_disable_overlay_and_restore_tabs_without_losing_other_settings() {
         for pack in FILES.iter().filter(|p| p.scope != PackScope::Lol) {
             // 同时覆盖旧版账号根名修复和全局配置；额外字段不能被模板清掉。
@@ -2435,7 +2501,7 @@ pub async fn steam_cover(include_global: bool, app: tauri::AppHandle) -> Result<
     tauri::async_runtime::spawn_blocking(move || {
         let _steam_op = STEAM_OP.lock().unwrap(); // 全程持锁：与 switch/delete/login_new 互斥
         STEAM_GENERATION.fetch_add(1, Ordering::SeqCst);
-        cover_locked(include_global, app)
+        cover_locked(include_global, app, None)
     })
     .await
     .map_err(|e| format!("后台任务失败: {e}"))?
@@ -2536,13 +2602,12 @@ pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
 
 /// 切换账号（杀 Steam/轮询可阻塞 ~30s+，async + spawn_blocking 不冻结 UI）
 #[tauri::command]
-pub async fn switch_account(sid64: String, app: AppHandle) -> Result<String, String> {
-    let name = tauri::async_runtime::spawn_blocking(move || switch(&sid64))
-        .await
-        .map_err(|e| format!("后台任务失败: {e}"))??;
-    log("acct", "切换 Steam 账号", &format!("已切换到 {}", name), true);
-    let _ = app.emit("steam-accounts-changed", ());
-    Ok(name)
+pub async fn switch_account(sid64: String, app: AppHandle) -> Result<LoginResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _steam_op = STEAM_OP.lock().unwrap();
+        let account = switch_locked(&sid64, app.clone())?;
+        Ok(finish_login(account, app))
+    }).await.map_err(|e| format!("后台任务失败: {e}"))?
 }
 
 /// 删除账号（前端已做二次确认；整目录删除走后台线程）
@@ -2559,8 +2624,7 @@ pub async fn delete_account(sid64: String, app: AppHandle) -> Result<String, Str
 /// 新增登录 + 串联自动覆盖（2026-09-20 用户确认：登录+配置一步到位）。
 /// 密码不写日志；登录轮询最长 ~180s（等 SteamGuard），必须走后台线程。
 #[tauri::command]
-pub async fn login_new(account: String, password: String, app: AppHandle) -> Result<String, String> {
-    let app2 = app.clone();
+pub async fn login_new(account: String, password: String, app: AppHandle) -> Result<LoginResult, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
         // 全程持锁且登录→覆盖之间不释放（2026-09-28 修复：此前覆盖阶段实际无锁，
         // 窗口期与 switch/delete/steam_cover 并发会互踩杀启 Steam 与 vdf 写入）
@@ -2568,51 +2632,22 @@ pub async fn login_new(account: String, password: String, app: AppHandle) -> Res
         let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         let mut before_ts = accounts_list_v().into_iter().filter(|a| a.account_name.eq_ignore_ascii_case(account.trim()))
             .map(|a| a.timestamp).max().unwrap_or(0);
-        let name = match login_new_locked(&account, &password, &mut before_ts) {
-            Ok(n) => n,
+        let confirmed = match login_new_locked(&account, &password, &mut before_ts) {
+            Ok(account) => account,
             Err(e) => {
                 // 2026-09-29 晚到确认看护：超时≠失败（Steam 可能正在自更新/慢网络）。
                 // 后台最长 10 分钟盯 loginusers.vdf，确认登录成功后自动补跑串联覆盖，
                 // 与即时成功路径等效；期间用户手动重试也不冲突（STEAM_OP 串行）。
                 if e.contains("登录确认超时") {
-                    let app3 = app2.clone();
-                    watch_login(account, password, before_ts, generation, "新增登录确认", move |confirmed| {
-                        if let Some(acc) = confirmed {
-                            let display = display_name(&acc.persona_name, &acc.account_name);
-                            let note = match cover_locked(load_settings().global_cover_on, app3.clone()) {
-                                Ok(rep) => format!("，已自动补覆盖配置（{}/{} 成功）", rep.ok, rep.total),
-                                Err(err) => format!("，补覆盖未完成：{err}"),
-                            };
-                            log("acct", "晚到登录确认", &format!("{display} 已登录（登录耗时较长）{note}"), true);
-                            let _ = app3.emit("steam-accounts-changed", ());
-                        } else {
-                            log("acct", "晚到登录确认", "10 分钟内仍未检测到该账号登录成功，如需重试请点列表「登录」（密码已保存）", false);
-                        }
-                    });
+                    watch_login(account, Some(password), before_ts, generation, "新增登录确认", app);
                 }
                 return Err(e);
             }
         };
-        let include_global = load_settings().global_cover_on;
-        let note = match cover_locked(include_global, app2) {
-            Ok(rep) => format!("，已自动覆盖配置（{}/{} 成功）", rep.ok, rep.total),
-            Err(e) => format!("；自动覆盖未完成：{e}"),
-        };
-        Ok::<(String, String), String>((name, note))
+        Ok(finish_login(confirmed, app))
     })
     .await
     .map_err(|e| format!("后台任务失败: {e}"));
-    match result.and_then(|r| r) {   // 拍平双层 Result（spawn_blocking 外层 + 闭包内层）
-        Ok((name, note)) => {
-            // toast 只报状态+目标（用户要求），覆盖详情进日志
-            log("acct", "新增 Steam 账号", &format!("已登录 {}{}", name, note), true);
-            let _ = app.emit("steam-accounts-changed", ());
-            Ok(name)
-        }
-        Err(e) => {
-            log("acct", "新增 Steam 账号失败", &e, false);   // 失败也留痕（此前静默）
-            Err(e)
-        }
-    }
+    result.and_then(|r| r).inspect_err(|e| log("acct", "新增 Steam 账号失败", e, false))
 }
 }
