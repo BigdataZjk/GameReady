@@ -28,6 +28,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       const emit = (name, payload) => (listeners[name] || []).forEach(fn => fn({ payload: clone(payload) }));
       const publish = () => { snapshot.state_version++; emit('backup-changed', snapshot); };
       window.backupFixture = { snapshot, calls: [], accounts: [], loginResult: null, loginError: null,
+        generation: 0, operation: null, status: { paths_valid: {}, steam_running: false, lol_guard_on: false },
+        holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
         failSync: false, failSave: false, emit, publish };
       window.__TAURI__ = {
         event: { listen: async (name, fn) => { (listeners[name] ||= []).push(fn); return () => {}; } },
@@ -36,14 +38,36 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         core: { invoke: async (command, args = {}) => {
           window.backupFixture.calls.push({ command, args: clone(args) });
           if(command === 'backup_get') return clone(snapshot);
-          if(command === 'get_status') return { paths_valid: {}, steam_running: false, lol_guard_on: false };
+          if(command === 'get_status') {
+            const f = window.backupFixture;
+            if(f.holdStatus) return new Promise(resolve => f.statusResolvers.push(resolve));
+            return clone({ ...f.status, steam_operation: f.operation });
+          }
           if(command === 'get_settings') return { accent: '#00e5ff', close_behavior: 'tray' };
           if(command === 'accounts_list') return clone(window.backupFixture.accounts);
           if(command === 'list_logs') return [];
           if(command === 'switch_account' || command === 'login_new') {
-            await new Promise(resolve => setTimeout(resolve, 40));
-            if(window.backupFixture.loginError) throw { message: window.backupFixture.loginError };
-            return clone(window.backupFixture.loginResult);
+            const f = window.backupFixture, generation = ++f.generation;
+            const operation = (phase,message) => {
+              f.operation = { generation, phase, message, sid64: args.sid64 || null };
+              emit('steam-operation',f.operation);
+            };
+            operation('starting','正在启动 Steam');
+            if(f.holdLogin) await new Promise(resolve => f.releaseLogin = resolve);
+            else await new Promise(resolve => setTimeout(resolve, 40));
+            if(f.loginError){ operation('idle',''); throw { message: f.loginError }; }
+            const result = { pending:false, ...clone(f.loginResult), generation };
+            operation(result.pending ? 'waiting' : 'idle',result.pending ? result.message : '');
+            if(f.earlyFinal) emit('steam-login-finished',{ name:'Saved Player', pending:false, generation, ...f.earlyFinal });
+            return result;
+          }
+          if(command === 'steam_cover') {
+            const f = window.backupFixture, generation = ++f.generation;
+            f.operation = {generation,phase:'applying',message:'正在写入配置',sid64:f.status.current_steam_id64};
+            emit('steam-operation',f.operation);
+            await new Promise(resolve => f.releaseCover = resolve);
+            f.operation = {...f.operation,phase:'idle',message:''}; emit('steam-operation',f.operation);
+            return {ok:3,total:3,failed:[],auto_restarted:true};
           }
           if(command === 'backup_save_password') {
             await new Promise(resolve => setTimeout(resolve, 40));
@@ -181,7 +205,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const savedLogin = page.locator('#acctCards .acct').getByRole('button', { name: '登录', exact: true });
     async function assertLoginFeedback(message, ok) {
       await page.waitForFunction(text => document.querySelector('#tkTxt').textContent === text, message);
-      assert.equal(await page.locator('#ticker').getAttribute('class'), 'ticker ' + (ok ? 'ok' : 'err'));
+      assert.equal(await page.locator('#ticker').getAttribute('class'), 'ticker' + (ok == null ? '' : ok ? ' ok' : ' err'));
       assert.equal(await page.evaluate(() => progTimer), null, 'Completion must stop progress messages');
     }
     await savedLogin.click();
@@ -213,23 +237,40 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('#fPass').fill('visible password');
     await page.locator('#doLogin').click();
     await assertLoginFeedback('已登录 new_player，但配置覆盖失败：模拟注册表写入失败', false);
-    assert.equal(await page.locator('#fPass').inputValue(), '', 'Confirmed login clears credentials even if cover fails');
+    assert.equal(await page.locator('#fPass').inputValue(), 'visible password', 'An unsuccessful result retains credentials for retry');
     console.log('PASS new-account login preserves password input and displays configuration outcomes');
 
-    await page.evaluate(() => window.backupFixture.loginError = '等待验证码超时，后台继续确认登录');
+    await page.evaluate(() => window.backupFixture.loginError = 'Steam 启动失败');
     await savedLogin.click();
-    await assertLoginFeedback('等待验证码超时，后台继续确认登录', false);
+    await assertLoginFeedback('Steam 启动失败', false);
+    await page.evaluate(() => {
+      const f=window.backupFixture; f.loginError=null;
+      f.loginResult={name:'Saved Player',message:'请在 Steam 完成验证，随后自动应用配置',ok:true,pending:true};
+    });
+    await savedLogin.click();
+    await assertLoginFeedback('请在 Steam 完成验证，随后自动应用配置', null);
+    assert.equal(await page.evaluate(() => toastTimer),null,'Waiting feedback has no fade-out timer');
+    await page.evaluate(async () => {
+      const f=window.backupFixture;
+      f.status={...f.status,steam_running:true,current_steam_id64:f.accounts[0].steam_id64};
+      await refreshStatus();
+    });
+    assert.equal(await page.locator('#acctCards .acct.cur').count(),0,'Waiting target is not a confirmed current account');
+    assert.equal(await savedLogin.isEnabled(),true,'A pending verification can be replaced by a new login');
     for(const ok of [true, false]) {
       const message = ok ? '后台已确认登录，配置覆盖完成' : '后台已确认登录，但配置覆盖失败：模拟文件占用';
       await page.evaluate(({ message, ok }) => {
-        progStart(() => '旧登录进度');
-        window.backupFixture.emit('steam-login-finished', { name: 'Saved Player', message, ok });
+        const f=window.backupFixture;
+        f.status={...f.status,steam_running:false,current_steam_id64:null};
+        f.operation={generation:++f.generation,phase:'applying',message:'正在应用配置',sid64:f.accounts[0].steam_id64};
+        f.emit('steam-operation',f.operation);
+        f.emit('steam-login-finished', { name: 'Saved Player', message, ok, generation:f.generation,pending:false });
       }, { message, ok });
       await assertLoginFeedback(message, ok);
     }
     assert.equal(await page.evaluate(() => window.backupFixture.calls.some(c => c.command === 'steam_cover')), false,
       'Login configuration is applied once by the backend, never by a second frontend IPC');
-    console.log('PASS late login success/failure events, timeout feedback, no duplicate cover IPC');
+    console.log('PASS pending verification feedback, truthful current-account badge, late outcomes, no duplicate cover IPC');
     for(const action of ['switch', 'new']) {
       const progress = await page.evaluate(action => {
         const f = window.backupFixture;
@@ -242,7 +283,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
           document.querySelector('#doLogin').click();
         }
         const message = document.querySelector('#tkTxt').textContent, timer = progTimer;
-        f.emit('steam-login-finished', { name: 'old_player', message: '上次后台登录失败', ok: false });
+        f.emit('steam-login-finished', { name: 'old_player', message: '上次后台登录失败', ok: false,generation:f.generation-1,pending:false });
+        f.emit('steam-operation',{generation:f.generation-1,phase:'idle',message:'旧操作',sid64:null});
         return { busy: switchBusy || loginBusy, messageUnchanged: document.querySelector('#tkTxt').textContent === message,
           timerUnchanged: timer !== null && progTimer === timer };
       }, action);
@@ -251,6 +293,110 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await assertLoginFeedback('本次登录配置覆盖完成', true);
     }
     console.log('PASS late login events preserve active switch/new login progress and IPC results');
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.loginResult={name:'Saved Player',message:'迟到的等待结果',ok:true,pending:true};
+      f.earlyFinal={message:'最终确认已先到达',ok:true};
+    });
+    await savedLogin.click();
+    await assertLoginFeedback('最终确认已先到达',true);
+    await page.evaluate(() => {
+      const f=window.backupFixture; f.earlyFinal=null;
+      f.emit('steam-operation',{generation:f.generation,phase:'waiting',message:'迟到的等待阶段',sid64:f.accounts[0].steam_id64});
+    });
+    await assertLoginFeedback('最终确认已先到达',true);
+    console.log('PASS final-before-pending result and late same-generation phase rejection');
+
+    await page.evaluate(() => {
+      const f=window.backupFixture; f.holdLogin=true;
+      f.loginResult={name:'submitted_player',message:'提交的账号已完成',ok:true};
+    });
+    await page.locator('#fUser').fill('submitted_player');
+    await page.locator('#fPass').fill('submitted password');
+    await page.locator('#doLogin').click();
+    await page.waitForFunction(() => typeof window.backupFixture.releaseLogin === 'function');
+    await page.locator('#fUser').fill('next_player');
+    await page.locator('#fPass').fill('next password');
+    await page.evaluate(() => {const f=window.backupFixture;f.holdLogin=false;f.releaseLogin();});
+    await assertLoginFeedback('提交的账号已完成',true);
+    assert.equal(await page.locator('#fUser').inputValue(),'next_player');
+    assert.equal(await page.locator('#fPass').inputValue(),'next password');
+    console.log('PASS edits to next-login draft survive the previous result');
+
+    for(const phase of ['stopping','applying','starting','restoring']) {
+      const count = await page.evaluate(phase => {
+        const f=window.backupFixture;
+        f.operation={generation:++f.generation,phase,message:'阶段 '+phase,sid64:f.accounts[0].steam_id64};
+        f.emit('steam-operation',f.operation);
+        return f.calls.length;
+      },phase);
+      assert.equal(await page.locator('#doLogin').isDisabled(),true);
+      assert.equal(await page.locator('#coverBtn').isDisabled(),true);
+      assert.equal(await page.locator('#acctCards .acct button:enabled').count(),0);
+      await page.evaluate(() => {doSwitch(window.backupFixture.accounts[0]);document.querySelector('#doLogin').click();document.querySelector('#coverBtn').click();});
+      assert.equal(await page.evaluate(() => window.backupFixture.calls.length),count);
+    }
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.operation={...f.operation,phase:'idle',message:''};f.emit('steam-operation',f.operation);
+    });
+    assert.equal(await savedLogin.isEnabled(),true);
+    assert.equal(await page.locator('#doLogin').isEnabled(),true);
+    console.log('PASS every busy backend phase locks controls and idle unlocks them');
+
+    const current = await page.evaluate(async () => {
+      const f=window.backupFixture; f.holdStatus=true;
+      const first=refreshStatus(), second=refreshStatus();
+      f.statusResolvers[1]({...f.status,current_steam_id64:'newer'});await second;
+      f.statusResolvers[0]({...f.status,current_steam_id64:'older'});await first;
+      f.holdStatus=false;
+      return state.currentSid64;
+    });
+    assert.equal(current,'newer');
+    const phaseAfterStaleStatus = await page.evaluate(async () => {
+      const f=window.backupFixture; f.holdStatus=true; f.statusResolvers=[];
+      const oldOperation=structuredClone(f.operation), request=refreshStatus();
+      f.operation={generation:++f.generation,phase:'applying',message:'最新覆盖阶段',sid64:f.accounts[0].steam_id64};
+      f.emit('steam-operation',f.operation);
+      f.statusResolvers[0]({...f.status,steam_operation:oldOperation});await request;
+      f.holdStatus=false;
+      const phase=steamOperation.phase;
+      f.operation={...f.operation,phase:'idle',message:''};f.emit('steam-operation',f.operation);
+      return phase;
+    });
+    assert.equal(phaseAfterStaleStatus,'applying');
+    console.log('PASS stale status responses cannot roll back current-account state');
+
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.operation={generation:++f.generation,phase:'waiting',message:'旧路径等待登录',sid64:f.accounts[0].steam_id64};
+      f.emit('steam-operation',f.operation);
+      f.operation={generation:++f.generation,phase:'idle',message:'Steam 路径已更新，上次登录确认已取消',sid64:null};
+      applyStatus({...f.status,steam_operation:f.operation});
+    });
+    await assertLoginFeedback('Steam 路径已更新，上次登录确认已取消',null);
+    assert.equal(await page.locator('#doLogin').isEnabled(),true);
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.emit('steam-login-finished',{generation:f.generation-1,pending:false,ok:true,name:'old_player',message:'旧路径错误成功'});
+      f.operation={...f.operation,message:''};f.emit('steam-operation',f.operation);
+    });
+    await assertLoginFeedback('Steam 路径已更新，上次登录确认已取消',null);
+    console.log('PASS path-change cancellation replaces waiting feedback and empty idle stays silent');
+
+    await page.evaluate(async () => {
+      const f=window.backupFixture;f.status={...f.status,steam_running:true,current_steam_id64:f.accounts[0].steam_id64};
+      await refreshStatus();
+    });
+    await page.locator('#coverBtn').click();
+    await page.waitForFunction(() => typeof window.backupFixture.releaseCover === 'function');
+    await page.waitForTimeout(1300);
+    assert.equal(await page.locator('#coverBadge').textContent(),'进行中');
+    assert.notEqual(await page.locator('#coverBtn').evaluate(el=>el.style.getPropertyValue('--p')),'100');
+    await page.evaluate(() => window.backupFixture.releaseCover());
+    await page.waitForFunction(() => document.querySelector('#coverBadge').textContent === '完成');
+    assert.equal(await page.locator('#coverBtn').evaluate(el=>el.style.getPropertyValue('--p')),'100');
+    console.log('PASS cover shows real completion rather than reaching 100% on a timer');
     assert.deepEqual(errors, []);
     console.log('PASS no JavaScript runtime errors (480 x 660 viewport)');
   } finally {

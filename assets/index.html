@@ -469,7 +469,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.5</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.6</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -624,7 +624,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.5</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.6</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -780,7 +780,7 @@ const displayName = a => a.persona_name ? (a.persona_name+'('+a.account_name+')'
 let toastTimer = null;
 function toast(msg, type, sticky){
   const bar = $('ticker'); if(!bar) return;
-  clearTimeout(toastTimer);
+  clearTimeout(toastTimer); toastTimer = null;
   bar.className = 'ticker' + (type ? ' ' + type : '');
   const txt = $('tkTxt');
   txt.textContent = msg;
@@ -800,7 +800,6 @@ function toast(msg, type, sticky){
 let progTimer = null, progSec = 0;
 function progStart(labelFn){ progStop(); progSec = 0; progTimer = setInterval(()=>{ progSec += 2; toast(labelFn(progSec), null, true); }, 2000); }
 function progStop(){ if(progTimer){ clearInterval(progTimer); progTimer = null; } }
-function loginFinished(result){ progStop(); toast(result.message, result.ok ? 'ok' : 'err'); }
 /* 窗口尺寸变化后重算滚动（播报文字不变，仅重新测量宽度） */
 window.addEventListener('resize', ()=>{
   const t = $('tkTxt'), bar = $('ticker'); if(!t || !t.textContent) return;
@@ -962,6 +961,7 @@ function applyStatus(st){
   if(!st) return;
   const prevState = state.status;   // 是否首次落地（首次才重置 LOL 绿点）
   state.status = st;
+  applySteamOperation(st.steam_operation);
   if(st.current_steam_id64 !== undefined) state.currentSid64 = st.current_steam_id64 || null;
   // 同步 settings 快照中的路径：防止启动时的旧路径经设置页防抖回存把 set_paths 的新路径回滚
   if(state.settings){
@@ -979,6 +979,11 @@ function applyStatus(st){
   // 后续 applyStatus（如 set_paths 返回）不再重置，避免正在运行时被错误置灰。
   if(!prevState) setDot($('lolDot'), false);
   renderAccountsPage();   // Steam 运行态变化 → "当前登录"标记即时跟随
+}
+let statusRequest = 0;
+async function refreshStatus(){
+  const request = ++statusRequest, status = await invoke('get_status');
+  if(request === statusRequest) applyStatus(status);
 }
 /* 走查：路径被 ellipsis 截断后无处看全 —— 点击路径文本（主页路径条/设置页路径值）打开路径模态查看与修改 */
 [['lolPathVal','lol'],['steamPathVal','steam'],['setLolVal','lol'],['setSteamVal','steam']].forEach(([id, game])=>{
@@ -1059,20 +1064,8 @@ function applyCoverReport(rep){
     toast('覆盖完成 '+ok+'/'+total + (rep.auto_restarted ? '，Steam 已重启' : ''), 'ok');
   }
 }
-function animateCover(ms){   // 本地进度环动画（约 1.2s），真实结果以 invoke/cover-done 为准
-  return new Promise(res=>{
-    const t0 = performance.now();
-    (function step(t){
-      const p = Math.min(100, (t - t0) / ms * 100);
-      coverBtn.style.setProperty('--p', p);
-      if(coverBusy) setCoverBadge('覆盖中 '+Math.floor(p)+'%', 'on');   // 徽标实时进度（真实结束以结果为准）
-      if(p < 100) requestAnimationFrame(step); else res();
-    })(t0);
-  });
-}
 coverBtn.addEventListener('click', async ()=>{
-  if(coverBusy) return;
-  if(switchBusy || loginBusy || delBusy){ toast('Steam 账号操作进行中，请稍候', 'err'); return; }
+  if(steamBusy()) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   if(!state.currentSid64){   // R2：Steam 未运行/未登录不可覆盖——无进度环，按钮灰一下表示无效点击
     coverBtn.classList.remove('invalid'); void coverBtn.offsetWidth;   // 重触发动画
@@ -1081,27 +1074,28 @@ coverBtn.addEventListener('click', async ()=>{
     return;
   }
   coverBusy = true;
+  beginSteamOperation('正在应用 Steam 配置…', state.currentSid64);
   coverBtn.classList.remove('hot','done');
   coverBtn.classList.add('running');            // R3 进度环（回归走查：此前只删不加，环永不显示）
   coverBtn.style.setProperty('--p', 0);
   coverT.textContent = '覆盖中…';
-  setCoverBadge('覆盖中 0%', 'on');
+  setCoverBadge('进行中', 'on');
   let failed = false;
-  const job = (async ()=>{
-    try{
-      const report = await invoke('steam_cover', { includeGlobal: state.globalOn });
-      failed = !!(report.failed && report.failed.length);
-      applyCoverReport(report);
-    }catch(e){ failed = true; toast(errText(e), 'err'); }
-  })();
-  await Promise.all([animateCover(1200), job]);
+  try{
+    const report = await invoke('steam_cover', { includeGlobal: state.globalOn });
+    failed = !!(report.failed && report.failed.length);
+    applyCoverReport(report);
+  }catch(e){ failed = true; toast(errText(e), 'err'); }
+  coverBusy = false;
+  endSteamRequest();
   if(failed){
-    coverBtn.classList.remove('running'); coverT.textContent = '一键覆盖'; coverBusy = false;
+    coverBtn.classList.remove('running'); coverT.textContent = '一键覆盖';
     coverBadgeFail();
   }else{
     coverBtn.classList.remove('running'); coverBtn.classList.add('done'); coverT.textContent = '覆盖完成';
+    coverBtn.style.setProperty('--p', 100);
     setCoverBadge('完成', 'on');
-    setTimeout(()=>{ coverBtn.classList.remove('done'); coverT.textContent = '一键覆盖'; coverBusy = false; }, 1800);
+    setTimeout(()=>{ if(!coverBusy){ coverBtn.classList.remove('done'); coverT.textContent = '一键覆盖'; } }, 1800);
   }
 });
 /* R2 全局配置覆盖小开关（写入 Settings.global_cover_on，防抖保存） */
@@ -1112,10 +1106,68 @@ $('globalToggle').addEventListener('click', function(){
 
 /* ---------- Steam 账号面板（重构：内嵌大按钮下方；R6 完全清理 / R7 昵称(账号名)） ---------- */
 let acctBusy=false, acctStale=false, switchBusy=false, loginBusy=false;
+let steamGeneration=0, steamRequestGeneration=0, loginFinalGeneration=-1, steamOperation=null, loginDraft=null;
+function steamBusy(){
+  return switchBusy || loginBusy || delBusy || coverBusy ||
+    !!(steamOperation && ['requesting','stopping','applying','starting','restoring'].includes(steamOperation.phase));
+}
+function acceptSteamGeneration(generation){
+  if(!Number.isFinite(generation) || generation < Math.max(steamGeneration,steamRequestGeneration)) return false;
+  steamGeneration = generation;
+  return true;
+}
+function beginSteamOperation(message,sid64=null){
+  statusRequest++;
+  steamRequestGeneration = steamGeneration + 1;
+  steamOperation = {generation:steamRequestGeneration,phase:'requesting',message,sid64};
+  toast(message,null,true);
+  progStart(s=>message+'（已等待 '+s+'s）');
+  renderAccountsPage();
+  return steamRequestGeneration;
+}
+function endSteamRequest(){
+  steamRequestGeneration = 0;
+  if(steamOperation?.phase === 'requesting'){ steamOperation = null; progStop(); }
+  renderAccountsPage();
+}
+function applySteamOperation(operation){
+  if(!operation || !acceptSteamGeneration(operation.generation) || operation.generation === loginFinalGeneration) return;
+  const same = steamOperation?.generation === operation.generation && steamOperation.phase === operation.phase && steamOperation.message === operation.message;
+  steamOperation = operation;
+  if(!same){
+    statusRequest++;
+    progStop();
+    if(operation.phase !== 'idle'){
+      toast(operation.message,null,true);
+      if(operation.phase !== 'waiting') progStart(s=>operation.message+'（已等待 '+s+'s）');
+    }else if(operation.message) toast(operation.message);
+  }
+  renderAccountsPage();
+}
+function loginFinished(result){
+  if(!result || !acceptSteamGeneration(result.generation) || result.generation === loginFinalGeneration) return;
+  if(result.pending){
+    if(steamOperation?.phase === 'requesting' || !steamOperation)
+      applySteamOperation({generation:result.generation,phase:'waiting',message:result.message,sid64:steamOperation?.sid64 || null});
+    return;
+  }
+  loginFinalGeneration = result.generation;
+  steamOperation = null;
+  progStop();
+  toast(result.message,result.ok ? 'ok' : 'err');
+  if(result.ok && loginDraft?.generation === result.generation){
+    if($('fUser').value === loginDraft.user && $('fPass').value === loginDraft.password){ $('fUser').value=''; $('fPass').value=''; }
+    loginDraft = null;
+  }
+  renderAccountsPage();
+  refreshAccounts();
+  refreshStatus().catch(()=>{});
+}
 /* "当前登录账号"判定（用户语义 2026-09-20）：仅当 Steam 进程活跃 且 登录态为该账号。
    历史登录过/AutoLogin 记录都不算——Steam 没开就没有"当前登录" */
 function computeCurrentAccount(){
   if(!(state.status && state.status.steam_running) || !state.currentSid64) return null;
+  if(steamOperation?.phase === 'waiting' && steamOperation.sid64 === state.currentSid64) return null;
   const arr = Array.isArray(state.accounts) ? state.accounts : [];
   return arr.find(a=>a.steam_id64 && a.steam_id64===state.currentSid64) || null;
 }
@@ -1137,6 +1189,7 @@ async function refreshAccounts(){
 /* 页内账号卡片（大按钮下方）：每行 登录/删除 按钮；当前登录标记仅给活跃登录态账号 */
 function accountCard(a, cur){
   const isCur = a === cur;
+  const target = steamOperation?.sid64 === String(a.steam_id64), busy = steamBusy();
   const card = el('div', 'acct'+(isCur?' cur':''));
   card.dataset.sid = String(a.steam_id64);
   const av = el('div', 'avatar', firstChar(a.persona_name));
@@ -1146,11 +1199,13 @@ function accountCard(a, cur){
   nm.appendChild(el('span', null, a.persona_name || ''));
   nm.appendChild(el('span', 'an', '('+(a.account_name||'')+')'));
   info.appendChild(nm);
-  info.appendChild(el('div','acct-sub', isCur ? ('当前登录 · 上次 '+fmtAcctTsShort(a.timestamp)) : fmtAcctTs(a.timestamp)));
+  info.appendChild(el('div','acct-sub', target && steamOperation.phase === 'waiting' ? '等待 Steam 登录确认' : isCur ? ('当前登录 · 上次 '+fmtAcctTsShort(a.timestamp)) : fmtAcctTs(a.timestamp)));
   const op = el('div','op');
   if(!isCur){
     const go = el('button','op-btn go','登录'); go.type='button';
     const del = el('button','op-btn del','删除'); del.type='button';
+    go.disabled = del.disabled = busy;
+    if(target && busy) go.innerHTML = '<span class="spin-sm"></span> 处理中';
     go.addEventListener('click', ()=>doSwitch(a));
     del.addEventListener('click', ()=>doDelete(a));
     op.appendChild(go); op.appendChild(del);
@@ -1161,6 +1216,9 @@ function accountCard(a, cur){
   return card;
 }
 function renderAccountsPage(){
+  const busy = steamBusy();
+  $('doLogin').disabled = coverBtn.disabled = busy;
+  $('doLogin').innerHTML = loginBusy ? '<span class="spin-sm"></span> 登录中…' : '登 录';
   const box = $('acctCards');
   box.textContent = '';
   const arr = Array.isArray(state.accounts) ? state.accounts : [];
@@ -1171,43 +1229,35 @@ function renderAccountsPage(){
   box.appendChild(frag);
 }
 async function doSwitch(a){
-  if(switchBusy || loginBusy || delBusy || coverBusy){ toast('Steam 操作进行中，请稍候', 'err'); return; }
+  if(steamBusy()) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   switchBusy = true;
-  toast('正在登录并应用配置 '+displayName(a)+'…', null, true);
-  progStart(s => '正在登录并应用配置 '+displayName(a)+'…（已等待 '+s+'s）');
+  beginSteamOperation('正在登录并应用配置 '+displayName(a)+'…',String(a.steam_id64));
   try{
     loginFinished(await invoke('switch_account', { sid64: String(a.steam_id64) }));
   }catch(e){ toast(errText(e), 'err'); }
-  finally{ progStop(); }
-  switchBusy = false;
+  finally{ switchBusy = false; endSteamRequest(); }
   refreshAccounts();   // 后端 steam-accounts-changed 事件也会触发一次刷新，此处幂等
-  if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});   // 登录态以注册表/运行态真值刷新
+  refreshStatus().catch(()=>{});
 }
 let delBusy = false;
 async function doDelete(a){
-  if(delBusy || loginBusy || switchBusy || coverBusy){ toast('Steam 操作进行中，请稍候', 'err'); return; }
+  if(steamBusy()) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   const msg = '将完全清除账号「'+displayName(a)+'」在本机的所有数据：\n\n· loginusers.vdf 中的登录记录\n· userdata\\<该账号>\\ 整个配置目录\n\n全局配置不受影响。确定删除？';
   delBusy = true;
-  if(!await askConfirm(msg)){ delBusy = false; return; }
-  // 该卡片按钮置灰防重（refreshAccounts 后重建自然还原）
+  renderAccountsPage();
+  if(!await askConfirm(msg)){ delBusy = false; renderAccountsPage(); return; }
   const sid = String(a.steam_id64);
-  document.querySelectorAll('.acct').forEach(c=>{
-    if(c.dataset.sid === sid){
-      c.querySelectorAll('button').forEach(b=>{ b.disabled = true; });
-      const del = c.querySelector('.op-btn.del');
-      if(del) del.innerHTML = '<span class="spin-sm"></span> 删除中';
-    }
-  });
+  beginSteamOperation('正在删除本机账号 '+displayName(a)+'…',sid);
   try{
     const name = await invoke('delete_account', { sid64: sid });
     if(state.currentSid64 === a.steam_id64) state.currentSid64 = null;   // 删的是当前账号
     toast('已删除 '+(name || displayName(a)), 'ok');
   }catch(e){ toast('删除失败：'+errText(e), 'err'); }
-  finally{ delBusy = false; }
+  finally{ delBusy = false; endSteamRequest(); }
   refreshAccounts();
-  if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});     // 以注册表真值刷新登录态
+  refreshStatus().catch(()=>{});
 }
 /* 自定义确认模态（Promise 化，替代系统 confirm —— 全程序禁用系统弹窗） */
 let cfResolve = null;
@@ -1235,18 +1285,16 @@ $('doLogin').addEventListener('click', async ()=>{
   const u = $('fUser').value.trim(), p = $('fPass').value;
   $('fUser').value = u;
   if(!u || !p){ toast('请输入账号和密码', 'err'); (!u ? $('fUser') : $('fPass')).focus(); return; }
-  if(loginBusy || switchBusy || delBusy || coverBusy || !hasTauri){ toast(!hasTauri ? NO_TAURI_MSG : 'Steam 操作进行中，请稍候', 'err'); return; }
+  if(steamBusy()) return;
+  if(!hasTauri){ toast(NO_TAURI_MSG,'err'); return; }
   loginBusy = true;
-  const btn = $('doLogin'); btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span> 登录中…';
-  toast('正在登录并应用配置 '+u+'…', null, true);
-  progStart(s => '正在登录并应用配置 '+u+'…（已等待 '+s+'s，Steam 更新/验证码会更久）');   // 实时刷新等待时长
+  loginDraft = {generation:beginSteamOperation('正在登录并应用配置 '+u+'…'),user:u,password:p};
   try{
     loginFinished(await invoke('login_new', { account: u, password: p }));   // 后端确认登录并完成配置覆盖
-    $('fUser').value=''; $('fPass').value='';
     refreshAccounts();
-    if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});   // 回归走查：刷新 currentSid64，否则覆盖仍被拦"未登录"
+    refreshStatus().catch(()=>{});
   }catch(e){ toast(errText(e), 'err'); }   // 后端消息自含语境（超时≠失败等），不加"登录失败"前缀
-  finally{ progStop(); loginBusy=false; btn.disabled=false; btn.textContent='登 录'; }
+  finally{ loginBusy=false; endSteamRequest(); }
 });
 /* 回车即提交（桌面习惯） */
 [$('fUser'),$('fPass')].forEach(i=>i.addEventListener('keydown', e=>{
@@ -1798,11 +1846,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.5';
+  let v = '0.1.6';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.5 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.6 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();
@@ -1818,7 +1866,7 @@ async function init(){
     // 用户语义：Steam 运行态变化 = 登录态变化（"当前账号"仅指运行中的 Steam）——
     // 即时刷新徽标/覆盖可用性，Steam 关掉后界面立刻回到"未登录"
     if(state.status && st !== !!state.status.steam_running){
-      invoke('get_status').then(applyStatus).catch(()=>{});
+      refreshStatus().catch(()=>{});
     }
   });
   await on('guard-stats', e=>{
@@ -1834,14 +1882,14 @@ async function init(){
     toast('守护已停止：'+((e.payload && e.payload.message) || '连续覆盖失败'), 'err');
     setGuardUI(false);
   });
-  await on('cover-done', e=>{ if(e.payload) applyCoverReport(e.payload); });
-  await on('steam-login-finished', e=>{ if(!switchBusy && !loginBusy) loginFinished(e.payload); });
+  await on('steam-operation', e=>applySteamOperation(e.payload));
+  await on('steam-login-finished', e=>loginFinished(e.payload));
   await on('log-appended', e=>{ if(e.payload) onLogAppended(e.payload); });
   await on('steam-accounts-changed', ()=>{ refreshAccounts();                  // 模态开着会自动刷新列表
                                              refreshBackup(false);
-                                             invoke('get_status').then(applyStatus).catch(()=>{}); });   // + 登录态真值刷新
+                                             refreshStatus().catch(()=>{}); });
   await on('backup-changed',e=>applyBackup(e.payload,false));
-  try{ applyStatus(await invoke('get_status')); }
+  try{ await refreshStatus(); }
   catch(e){ toast('状态读取失败：'+errText(e), 'err'); }
   try{ applySettings(await invoke('get_settings')); }
   catch(e){ toast('设置读取失败：'+errText(e), 'err'); }
