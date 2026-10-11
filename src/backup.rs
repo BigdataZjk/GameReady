@@ -167,7 +167,10 @@ impl Store {
         }
         self.confirmed_credentials.insert(account.trim().to_ascii_lowercase(), credential_digest(account, password));
         if self.config.enabled && !credential_confirmed(&self.synced_credentials, account, password) {
-            self.enqueue(account.trim(), password, source);
+            // 保留同密码在途批次的 id，让成功回执能直接清队，避免重复上传。
+            if !self.queue.iter().any(|p| p.account.eq_ignore_ascii_case(account.trim()) && p.password == password) {
+                self.enqueue(account.trim(), password, source);
+            }
             if !self.blocked && self.status != "syncing" {
                 self.status = "pending".into();
                 self.message = "登录已确认，账号已进入本地待同步队列".into();
@@ -337,10 +340,6 @@ fn prune_unconfirmed(store: &mut Store) {
 fn upload_allowed(store: &Store, pending: &Pending) -> bool {
     valid_credential(&pending.account, &pending.password)
         && (pending.manual || credential_confirmed(&store.confirmed_credentials, &pending.account, &pending.password))
-}
-
-pub fn is_login_confirmed(account: &str, password: &str) -> bool {
-    load().map(|s| credential_confirmed(&s.confirmed_credentials, account, password)).unwrap_or(false)
 }
 
 pub fn login_attempt_started(account: &str) -> Result<()> {
@@ -1459,12 +1458,41 @@ mod tests {
     }
 
     #[test]
+    fn repeated_confirmation_preserves_pending_batch_and_manual_authorization() {
+        for manual in [false, true] {
+            let mut store = Store::default();
+            store.config.enabled = true;
+            if manual {
+                let creds = BTreeMap::from([("player".into(), "same".into())]);
+                let inventory = classify_inventory(&creds, &[], &store.confirmed_credentials);
+                prepare_manual(&mut store, &inventory, Some("player")).unwrap();
+                assert!(store.confirmed_credentials.is_empty());
+            } else {
+                store.confirm_success("player", "same", "首次确认").unwrap();
+            }
+            store.status = "syncing".into();
+            let sent = store.queue.clone();
+            store.confirm_success(" PLAYER ", "same", "重复确认").unwrap();
+            assert_eq!(serde_json::to_value(&store.queue).unwrap(), serde_json::to_value(&sent).unwrap());
+            assert_eq!(store.queue[0].manual, manual);
+            assert_eq!(store.status, "syncing");
+            assert!(credential_confirmed(&store.confirmed_credentials, "player", "same"));
+            assert!(upload_allowed(&store, &store.queue[0]));
+            store.acknowledge(&sent);
+            assert!(store.queue.is_empty());
+            store.confirm_success("player", "same", "回执后确认").unwrap();
+            assert!(store.queue.is_empty());
+        }
+    }
+
+    #[test]
     fn confirmed_login_auto_queues_once_and_old_ack_does_not_hide_new_password() {
         let mut store = Store::default();
         store.config.enabled = true;
         store.confirm_success("player", "first", "列表登录").unwrap();
         let sent = store.queue.clone();
         store.confirm_success("player", "second", "新增登录确认").unwrap();
+        assert_ne!(store.queue[0].id, sent[0].id);
         store.acknowledge(&sent);
         assert_eq!(store.queue.len(), 1);
         assert_eq!(store.queue[0].password, "second");
