@@ -802,6 +802,17 @@ pub struct CoverReport {
     pub auto_restarted: bool,
 }
 
+// Steam 将叠加界面缩放保存在 HKCU，写入 VDF 不会关闭这个开关。
+fn disable_overlay_scaling(registry: &RegKey) -> CoverResult {
+    let result = registry.open_subkey_with_flags(r"Software\Valve\Steam", KEY_SET_VALUE)
+        .and_then(|key| key.set_value("OverlayScaleInterface", &0u32));
+    CoverResult {
+        rel: "Steam 叠加界面缩放".into(),
+        ok: result.is_ok(),
+        err: result.err().map(|e| format!("关闭叠加界面缩放失败：{e}")),
+    }
+}
+
 /// 调用方持 STEAM_OP：退出 Steam、合并配置，再凭据直登恢复原账号。
 pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Result<CoverReport, String> {
     // ⓪ 用户语义（2026-09-20 修正）：覆盖只针对**正在运行且已登录**的 Steam——
@@ -866,6 +877,7 @@ pub(crate) fn cover_locked(include_global: bool, app: tauri::AppHandle) -> Resul
     if include_global {
         all.extend(write_all(root, PackScope::SteamGlobal, None));
     }
+    all.push(disable_overlay_scaling(&RegKey::predef(HKEY_CURRENT_USER)));
 
     let ok = all.iter().filter(|r| r.ok).count();
     let failed: Vec<CoverResult> = all.iter().filter(|r| !r.ok).cloned().collect();
@@ -2177,6 +2189,48 @@ pub fn get_status() -> AppStatus {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn embedded_steam_templates_disable_overlay_and_restore_tabs_without_losing_other_settings() {
+        for pack in FILES.iter().filter(|p| p.scope != PackScope::Lol) {
+            // 同时覆盖旧版账号根名修复和全局配置；额外字段不能被模板清掉。
+            let original = br#""InstallConfigStore" {
+                "system" { "EnableGameOverlay" "1" "InGameOverlayRestoreBrowserTabs" "1" "Unrelated" "keep" }
+                "Software" { "Valve" { "Steam" { "OtherPreference" "keep" } } }
+            }"#;
+            let merged = vdf::merge(original, pack.bytes).unwrap();
+            let text = std::str::from_utf8(&merged).unwrap();
+            let root = if pack.scope == PackScope::SteamAccount { "UserLocalConfigStore" } else { "InstallConfigStore" };
+            assert!(text.starts_with(&format!("\"{root}\"\n")));
+            for key in ["EnableGameOverlay", "InGameOverlayRestoreBrowserTabs"] {
+                assert_eq!(text.matches(&format!("\"{key}\"\t\t\"0\"")).count(), 1);
+                assert!(!text.contains(&format!("\"{key}\"\t\t\"1\"")));
+            }
+            assert!(text.contains("\"Unrelated\"\t\t\"keep\""));
+            assert!(text.contains("\"OtherPreference\"\t\t\"keep\""));
+            assert_eq!(vdf::merge(&merged, pack.bytes).unwrap(), merged);
+        }
+    }
+
+    #[test]
+    fn overlay_scaling_is_disabled_in_registry_and_failures_are_reported() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let path = format!(r"Software\GameReady-Test-{}", uuid::Uuid::new_v4());
+        let (fixture, _) = hkcu.create_subkey(&path).unwrap();
+        let missing = disable_overlay_scaling(&fixture);
+        assert!(!missing.ok && missing.err.is_some());
+        let (steam, _) = fixture.create_subkey(r"Software\Valve\Steam").unwrap();
+        steam.set_value("OverlayScaleInterface", &1u32).unwrap();
+        steam.set_value("Unrelated", &"keep").unwrap();
+        for _ in 0..2 {
+            let result = disable_overlay_scaling(&fixture);
+            assert!(result.ok && result.err.is_none());
+            assert_eq!(steam.get_value::<u32, _>("OverlayScaleInterface").unwrap(), 0);
+            assert_eq!(steam.get_value::<String, _>("Unrelated").unwrap(), "keep");
+        }
+        drop(steam); drop(fixture);
+        hkcu.delete_subkey_all(path).unwrap();
+    }
 
     #[test]
     fn failed_atomic_replace_keeps_original_and_cleans_temporary_files() {
