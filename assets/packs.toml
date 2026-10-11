@@ -1991,6 +1991,11 @@ crlf = true
 content = '''
 "InstallConfigStore"
 {
+	"system"
+	{
+		"EnableGameOverlay"		"0"
+		"InGameOverlayRestoreBrowserTabs"		"0"
+	}
 	"Software"
 	{
 		"Valve"
@@ -2014,6 +2019,8 @@ content = '''
 {
 	"system"
 	{
+		"EnableGameOverlay"		"0"
+		"InGameOverlayRestoreBrowserTabs"		"0"
 		"PushToTalkKey"		"0"
 		"InGameOverlayShortcutKey"		"KEY_NONE"
 		"InGameOverlayShowFPSCorner"		"2"
