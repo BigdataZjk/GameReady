@@ -27,7 +27,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       };
       const emit = (name, payload) => (listeners[name] || []).forEach(fn => fn({ payload: clone(payload) }));
       const publish = () => { snapshot.state_version++; emit('backup-changed', snapshot); };
-      window.backupFixture = { snapshot, calls: [], failSync: false, failSave: false, emit, publish };
+      window.backupFixture = { snapshot, calls: [], accounts: [], loginResult: null, loginError: null,
+        failSync: false, failSave: false, emit, publish };
       window.__TAURI__ = {
         event: { listen: async (name, fn) => { (listeners[name] ||= []).push(fn); return () => {}; } },
         dialog: { open: async () => null },
@@ -37,7 +38,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
           if(command === 'backup_get') return clone(snapshot);
           if(command === 'get_status') return { paths_valid: {}, steam_running: false, lol_guard_on: false };
           if(command === 'get_settings') return { accent: '#00e5ff', close_behavior: 'tray' };
-          if(command === 'accounts_list' || command === 'list_logs') return [];
+          if(command === 'accounts_list') return clone(window.backupFixture.accounts);
+          if(command === 'list_logs') return [];
+          if(command === 'switch_account' || command === 'login_new') {
+            await new Promise(resolve => setTimeout(resolve, 40));
+            if(window.backupFixture.loginError) throw { message: window.backupFixture.loginError };
+            return clone(window.backupFixture.loginResult);
+          }
           if(command === 'backup_save_password') {
             await new Promise(resolve => setTimeout(resolve, 40));
             if(window.backupFixture.failSave) throw { message: '模拟本地保存失败' };
@@ -163,6 +170,87 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     console.log('PASS save error feedback, retry input retention, cancel clears password');
 
     await page.screenshot({ path: path.resolve(__dirname, '../target/backup-sync-ui.png') });
+    await page.locator('#closeBackup').click();
+    await page.evaluate(() => {
+      const f = window.backupFixture;
+      f.accounts = [{ steam_id64: '76561198000000001', account_name: 'saved_player',
+        persona_name: 'Saved Player', timestamp: 1728000000 }];
+      f.loginResult = { name: 'Saved Player', message: '已登录 Saved Player，配置覆盖完成', ok: true };
+      f.emit('steam-accounts-changed', null);
+    });
+    const savedLogin = page.locator('#acctCards .acct').getByRole('button', { name: '登录', exact: true });
+    async function assertLoginFeedback(message, ok) {
+      await page.waitForFunction(text => document.querySelector('#tkTxt').textContent === text, message);
+      assert.equal(await page.locator('#ticker').getAttribute('class'), 'ticker ' + (ok ? 'ok' : 'err'));
+      assert.equal(await page.evaluate(() => progTimer), null, 'Completion must stop progress messages');
+    }
+    await savedLogin.click();
+    await assertLoginFeedback('已登录 Saved Player，配置覆盖完成', true);
+    assert.deepEqual(await page.evaluate(() => window.backupFixture.calls.find(c => c.command === 'switch_account').args),
+      { sid64: '76561198000000001' });
+    await page.evaluate(() => window.backupFixture.loginResult = {
+      name: 'Saved Player', message: '已登录 Saved Player，但配置覆盖失败：模拟写入失败', ok: false
+    });
+    await savedLogin.click();
+    await assertLoginFeedback('已登录 Saved Player，但配置覆盖失败：模拟写入失败', false);
+    console.log('PASS account-list login displays configuration success/failure and stops progress');
+
+    await page.evaluate(() => window.backupFixture.loginResult = {
+      name: 'new_player', message: '已登录 new_player，配置覆盖完成', ok: true
+    });
+    await page.locator('#fUser').fill(' new_player ');
+    await page.locator('#fPass').fill(' visible password ');
+    await page.locator('#doLogin').click();
+    await assertLoginFeedback('已登录 new_player，配置覆盖完成', true);
+    assert.deepEqual(await page.evaluate(() => window.backupFixture.calls.find(c => c.command === 'login_new').args),
+      { account: 'new_player', password: ' visible password ' });
+    assert.equal(await page.locator('#fPass').inputValue(), '');
+    assert.equal(await page.locator('#doLogin').isEnabled(), true);
+    await page.evaluate(() => window.backupFixture.loginResult = {
+      name: 'new_player', message: '已登录 new_player，但配置覆盖失败：模拟注册表写入失败', ok: false
+    });
+    await page.locator('#fUser').fill('new_player');
+    await page.locator('#fPass').fill('visible password');
+    await page.locator('#doLogin').click();
+    await assertLoginFeedback('已登录 new_player，但配置覆盖失败：模拟注册表写入失败', false);
+    assert.equal(await page.locator('#fPass').inputValue(), '', 'Confirmed login clears credentials even if cover fails');
+    console.log('PASS new-account login preserves password input and displays configuration outcomes');
+
+    await page.evaluate(() => window.backupFixture.loginError = '等待验证码超时，后台继续确认登录');
+    await savedLogin.click();
+    await assertLoginFeedback('等待验证码超时，后台继续确认登录', false);
+    for(const ok of [true, false]) {
+      const message = ok ? '后台已确认登录，配置覆盖完成' : '后台已确认登录，但配置覆盖失败：模拟文件占用';
+      await page.evaluate(({ message, ok }) => {
+        progStart(() => '旧登录进度');
+        window.backupFixture.emit('steam-login-finished', { name: 'Saved Player', message, ok });
+      }, { message, ok });
+      await assertLoginFeedback(message, ok);
+    }
+    assert.equal(await page.evaluate(() => window.backupFixture.calls.some(c => c.command === 'steam_cover')), false,
+      'Login configuration is applied once by the backend, never by a second frontend IPC');
+    console.log('PASS late login success/failure events, timeout feedback, no duplicate cover IPC');
+    for(const action of ['switch', 'new']) {
+      const progress = await page.evaluate(action => {
+        const f = window.backupFixture;
+        f.loginError = null;
+        f.loginResult = { name: 'current_player', message: '本次登录配置覆盖完成', ok: true };
+        if(action === 'switch') doSwitch(f.accounts[0]);
+        else {
+          document.querySelector('#fUser').value = 'current_player';
+          document.querySelector('#fPass').value = 'visible password';
+          document.querySelector('#doLogin').click();
+        }
+        const message = document.querySelector('#tkTxt').textContent, timer = progTimer;
+        f.emit('steam-login-finished', { name: 'old_player', message: '上次后台登录失败', ok: false });
+        return { busy: switchBusy || loginBusy, messageUnchanged: document.querySelector('#tkTxt').textContent === message,
+          timerUnchanged: timer !== null && progTimer === timer };
+      }, action);
+      assert.deepEqual(progress, { busy: true, messageUnchanged: true, timerUnchanged: true },
+        'A previous late event must not replace active ' + action + ' login progress');
+      await assertLoginFeedback('本次登录配置覆盖完成', true);
+    }
+    console.log('PASS late login events preserve active switch/new login progress and IPC results');
     assert.deepEqual(errors, []);
     console.log('PASS no JavaScript runtime errors (480 x 660 viewport)');
   } finally {

@@ -469,7 +469,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.4</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.5</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -624,7 +624,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.4</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.5</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -800,6 +800,7 @@ function toast(msg, type, sticky){
 let progTimer = null, progSec = 0;
 function progStart(labelFn){ progStop(); progSec = 0; progTimer = setInterval(()=>{ progSec += 2; toast(labelFn(progSec), null, true); }, 2000); }
 function progStop(){ if(progTimer){ clearInterval(progTimer); progTimer = null; } }
+function loginFinished(result){ progStop(); toast(result.message, result.ok ? 'ok' : 'err'); }
 /* 窗口尺寸变化后重算滚动（播报文字不变，仅重新测量宽度） */
 window.addEventListener('resize', ()=>{
   const t = $('tkTxt'), bar = $('ticker'); if(!t || !t.textContent) return;
@@ -1173,11 +1174,10 @@ async function doSwitch(a){
   if(switchBusy || loginBusy || delBusy || coverBusy){ toast('Steam 操作进行中，请稍候', 'err'); return; }
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   switchBusy = true;
-  toast('正在登录 '+displayName(a)+'…', null, true);
-  progStart(s => '正在登录 '+displayName(a)+'…（已等待 '+s+'s）');
+  toast('正在登录并应用配置 '+displayName(a)+'…', null, true);
+  progStart(s => '正在登录并应用配置 '+displayName(a)+'…（已等待 '+s+'s）');
   try{
-    const name = await invoke('switch_account', { sid64: String(a.steam_id64) });
-    toast('已登录 '+(name || displayName(a)), 'ok');
+    loginFinished(await invoke('switch_account', { sid64: String(a.steam_id64) }));
   }catch(e){ toast(errText(e), 'err'); }
   finally{ progStop(); }
   switchBusy = false;
@@ -1238,11 +1238,10 @@ $('doLogin').addEventListener('click', async ()=>{
   if(loginBusy || switchBusy || delBusy || coverBusy || !hasTauri){ toast(!hasTauri ? NO_TAURI_MSG : 'Steam 操作进行中，请稍候', 'err'); return; }
   loginBusy = true;
   const btn = $('doLogin'); btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span> 登录中…';
-  toast('正在登录 '+u+'…', null, true);
-  progStart(s => '正在登录 '+u+'…（已等待 '+s+'s，Steam 更新/验证码会更久）');   // 实时刷新等待时长
+  toast('正在登录并应用配置 '+u+'…', null, true);
+  progStart(s => '正在登录并应用配置 '+u+'…（已等待 '+s+'s，Steam 更新/验证码会更久）');   // 实时刷新等待时长
   try{
-    const name = await invoke('login_new', { account: u, password: p });   // 后端轮询 ≤180s（等 SteamGuard/更新）
-    toast('已登录 '+(name || u), 'ok');
+    loginFinished(await invoke('login_new', { account: u, password: p }));   // 后端确认登录并完成配置覆盖
     $('fUser').value=''; $('fPass').value='';
     refreshAccounts();
     if(hasTauri) invoke('get_status').then(applyStatus).catch(()=>{});   // 回归走查：刷新 currentSid64，否则覆盖仍被拦"未登录"
@@ -1799,11 +1798,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.4';
+  let v = '0.1.5';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.4 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.5 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();
@@ -1836,6 +1835,7 @@ async function init(){
     setGuardUI(false);
   });
   await on('cover-done', e=>{ if(e.payload) applyCoverReport(e.payload); });
+  await on('steam-login-finished', e=>{ if(!switchBusy && !loginBusy) loginFinished(e.payload); });
   await on('log-appended', e=>{ if(e.payload) onLogAppended(e.payload); });
   await on('steam-accounts-changed', ()=>{ refreshAccounts();                  // 模态开着会自动刷新列表
                                              refreshBackup(false);
