@@ -115,6 +115,14 @@ pub struct Snapshot {
     pub next_retry_ms: i64,
 }
 
+impl Snapshot {
+    fn saved_message(&self) -> String {
+        if !self.config.enabled { return "自动备份已关闭，已有队列保留".into(); }
+        format!("配置已保存，{} 个账号待同步；{} 个账号待验证登录；{} 个账号需补输密码",
+            self.queue.len(), self.unconfirmed_password_accounts.len(), self.missing_password_accounts.len())
+    }
+}
+
 impl Store {
     fn snapshot(&self) -> Snapshot {
         self.snapshot_from_inventory(inventory(&self.confirmed_credentials))
@@ -141,10 +149,12 @@ impl Store {
             }
             Err(e) => (Vec::new(), Vec::new(), Some(e.message)),
         };
-        Snapshot { state_version: self.state_version, config: self.config.clone(), config_verified: self.verified && validate_config(&self.config).is_ok(),
+        let mut snapshot = Snapshot { state_version: self.state_version, config: self.config.clone(), config_verified: self.verified && validate_config(&self.config).is_ok(),
             missing_password_accounts, unconfirmed_password_accounts, inventory_error,
             queue, status: self.status.clone(), message: self.message.clone(),
-            last_success_ms: self.last_success_ms, next_retry_ms: self.next_retry_ms }
+            last_success_ms: self.last_success_ms, next_retry_ms: self.next_retry_ms };
+        if snapshot.message.starts_with("配置已保存") { snapshot.message = snapshot.saved_message(); }
+        snapshot
     }
 
     fn enqueue(&mut self, account: &str, password: &str, source: &str) {
@@ -177,6 +187,35 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    fn accept_connection_test(&mut self, revision: u64, tested: &Config) -> bool {
+        if self.revision != revision || !same_connection(&self.config, tested) { return false; }
+        self.verified = true;
+        if self.config.fingerprint.is_empty() { self.config.fingerprint = tested.fingerprint.clone(); }
+        self.failures = 0;
+        self.blocked = false;
+        self.next_retry_ms = 0;
+        if self.status != "syncing" {
+            self.status = if !self.config.enabled { "disabled" } else if self.queue.is_empty() { "idle" } else { "pending" }.into();
+            self.message = if self.config.enabled && !self.queue.is_empty() { "连接测试通过，等待自动同步" } else { "连接测试通过" }.into();
+        }
+        true
+    }
+
+    fn login_backup_note(&self, account: &str, password: Option<&str>) -> Option<String> {
+        if !self.config.enabled { return None; }
+        let Some(password) = password else { return Some("NAS 待补充密码".into()); };
+        if credential_confirmed(&self.synced_credentials, account, password) { return Some("NAS 已同步".into()); }
+        let queued = self.queue.iter().any(|p| p.account.eq_ignore_ascii_case(account.trim())
+            && p.password == password && upload_allowed(self, p));
+        Some(if queued {
+            if self.status == "syncing" { "NAS 同步进行中".into() }
+            else if self.blocked || self.next_retry_ms > 0 { format!("NAS 同步未完成，记录已保留：{}", self.message) }
+            else { "NAS 已排队".into() }
+        } else if credential_confirmed(&self.confirmed_credentials, account, password) {
+            "NAS 等待同步".into()
+        } else { "NAS 待验证登录".into() })
     }
 }
 
@@ -244,6 +283,13 @@ fn publish(store: &Store) {
 
 pub fn get() -> Result<Snapshot> { Ok(load()?.snapshot()) }
 
+pub fn login_backup_note(account: &str, password: Option<&str>) -> Option<String> {
+    match load() {
+        Ok(store) => store.login_backup_note(account, password),
+        Err(e) => Some(format!("NAS 状态读取失败：{}", e.message)),
+    }
+}
+
 pub fn credentials_changed() -> Result<()> { edit(|_| Ok(())) }
 
 fn same_connection(a: &Config, b: &Config) -> bool {
@@ -298,9 +344,7 @@ pub fn save(mut config: Config) -> Result<Snapshot> {
         s.blocked = false;
         s.next_retry_ms = 0;
         s.status = if !s.config.enabled { "disabled" } else if s.queue.is_empty() { "idle" } else { "pending" }.into();
-        s.message = if s.config.enabled {
-            format!("配置已保存，{} 个账号待同步；{} 个账号待验证登录；{} 个账号需补输密码", s.queue.len(), inventory.as_ref().map_or(0, |i| i.unconfirmed.len()), inventory.as_ref().map_or(0, |i| i.missing.len()))
-        } else { "自动备份已关闭，已有队列保留".into() };
+        s.message = "配置已保存".into();
         Ok(s.snapshot())
     })?;
     WAKE.notify_one();
@@ -316,7 +360,6 @@ struct Inventory {
     available: Vec<(String, String)>,
     credentials: Vec<(String, String)>,
     missing: Vec<String>,
-    unconfirmed: Vec<String>,
 }
 
 fn credential_digest(account: &str, password: &str) -> String {
@@ -368,14 +411,13 @@ fn classify_inventory(creds: &BTreeMap<String, String>, history: &[String], conf
     for account in history {
         grouped.entry(account.trim().to_ascii_lowercase()).or_default();
     }
-    let mut inventory = Inventory { available: Vec::new(), credentials: Vec::new(), missing: Vec::new(), unconfirmed: Vec::new() };
+    let mut inventory = Inventory { available: Vec::new(), credentials: Vec::new(), missing: Vec::new() };
     for (account, password) in grouped {
         if account.is_empty() { continue; }
         match password {
             Some(password) => {
                 inventory.available.push((account.clone(), password.clone()));
                 if credential_confirmed(confirmed, &account, &password) { inventory.credentials.push((account, password)); }
-                else { inventory.unconfirmed.push(account); }
             }
             None => inventory.missing.push(account),
         }
@@ -776,13 +818,8 @@ pub async fn test(mut config: Config) -> Result<TestReport> {
             config.fingerprint = fingerprint.clone();
             *TESTED_CONFIG.lock().unwrap_or_else(|p| p.into_inner()) = Some(config.clone());
             if same_connection(&saved.config, &config) {
-                edit(|s| {
-                    if same_connection(&s.config, &config) {
-                        s.verified = true;
-                        if s.config.fingerprint.is_empty() { s.config.fingerprint = fingerprint.clone(); }
-                    }
-                    Ok(())
-                })?;
+                let accepted = edit(|s| Ok(s.accept_connection_test(saved.revision, &config)))?;
+                if accepted { WAKE.notify_one(); }
             }
             Ok(TestReport { message: "SFTP 登录、文件写入、替换及读回验证通过".into(), fingerprint })
         }
@@ -793,7 +830,7 @@ pub async fn test(mut config: Config) -> Result<TestReport> {
             }
             if same_connection(&saved.config, &config) {
                 edit(|s| {
-                    if same_connection(&s.config, &config) { s.verified = false; }
+                    if s.revision == saved.revision && same_connection(&s.config, &config) { s.verified = false; }
                     Ok(())
                 })?;
             }
@@ -1186,6 +1223,34 @@ async fn manual_unconfirmed_password_syncs_directly_and_all_skips_receipts() {
 }
 
 #[tokio::test]
+async fn confirmed_login_syncs_over_sftp_and_reports_receipt_without_losing_remote_accounts() {
+    let f = fixture().await;
+    f.files.lock().unwrap().files.insert("/accounts.txt".into(), b"nas_only----keep\n".to_vec());
+    let mut store = Store { config: f.config.clone(), ..Default::default() };
+    store.confirm_success("player", "verified-password", "登录确认").unwrap();
+    assert_eq!(store.queue.len(), 1);
+    assert!(!store.queue[0].manual && upload_allowed(&store, &store.queue[0]));
+    assert_eq!(store.login_backup_note("player", Some("verified-password")).as_deref(), Some("NAS 已排队"));
+    let remote = Remote::connect(&store.config).await.unwrap();
+    let sent = store.queue.clone();
+    remote.commit(&store.config.remote_path, "automatic-device", &sent).await.unwrap();
+    store.acknowledge(&sent);
+    assert!(store.queue.is_empty());
+    assert!(credential_confirmed(&store.synced_credentials, "player", "verified-password"));
+    assert_eq!(store.login_backup_note("player", Some("verified-password")).as_deref(), Some("NAS 已同步"));
+    store.confirm_success("PLAYER", "verified-password", "重复登录确认").unwrap();
+    assert!(store.queue.is_empty()); // worker skips an empty automatic queue instead of uploading again.
+    {
+        let files = f.files.lock().unwrap();
+        assert_eq!(files.files["/accounts.txt"], b"nas_only----keep\nplayer----verified-password\n");
+        assert!(!files.removed.iter().any(|p| p == "/accounts.txt"));
+        assert!(!files.truncated.iter().any(|p| p == "/accounts.txt"));
+        assert_eq!(files.files.len(), 1);
+    }
+    remote.close().await;
+}
+
+#[tokio::test]
 async fn failed_replace_and_partial_reads_preserve_original() {
     let f = fixture().await;
     let original = b"user----original\n".to_vec();
@@ -1355,6 +1420,84 @@ mod tests {
     }
 
     #[test]
+    fn saved_message_counts_only_accounts_visible_in_the_snapshot() {
+        let mut store = Store::default();
+        store.config.enabled = true;
+        let creds: BTreeMap<_, _> = (0..4).map(|n| (format!("player{n}"), "manually-synced".into())).collect();
+        let inventory = classify_inventory(&creds, &[], &store.confirmed_credentials);
+        assert_eq!(inventory.available.len(), 4);
+        assert!(inventory.credentials.is_empty());
+        prepare_manual(&mut store, &inventory, None).unwrap();
+        store.acknowledge(&store.queue.clone());
+        store.message = "配置已保存，0 个账号待同步；4 个账号待验证登录；0 个账号需补输密码".into();
+        let restored: Store = serde_json::from_value(serde_json::to_value(&store).unwrap()).unwrap();
+        let snapshot = restored.snapshot_from_inventory(Ok(inventory));
+        assert!(snapshot.queue.is_empty() && snapshot.unconfirmed_password_accounts.is_empty());
+        assert_eq!(snapshot.message, "配置已保存，0 个账号待同步；0 个账号待验证登录；0 个账号需补输密码");
+        let creds = BTreeMap::from([("manual".into(), "saved".into()), ("unconfirmed".into(), "saved".into()),
+            ("confirmed".into(), "saved".into())]);
+        store.confirm_success("confirmed", "saved", "登录确认").unwrap();
+        let inventory = classify_inventory(&creds, &["missing".into()], &store.confirmed_credentials);
+        prepare_manual(&mut store, &inventory, Some("manual")).unwrap();
+        store.message = "配置已保存".into();
+        let snapshot = store.snapshot_from_inventory(Ok(inventory));
+        assert_eq!(snapshot.message, "配置已保存，2 个账号待同步；1 个账号待验证登录；1 个账号需补输密码");
+    }
+
+    #[test]
+    fn successful_connection_test_resumes_retries_without_changing_queue_or_inflight_status() {
+        let mut original = Store::default();
+        original.config.enabled = true;
+        original.revision = 7;
+        original.confirm_success("player", "verified", "登录确认").unwrap();
+        original.blocked = true; original.failures = 3; original.next_retry_ms = i64::MAX;
+        let mut tested = original.config.clone();
+        tested.fingerprint = "pinned".into();
+        for (status, enabled, expected) in [("auth_error", true, "pending"), ("syncing", true, "syncing"), ("auth_error", false, "disabled")] {
+            let mut store = original.clone();
+            store.status = status.into(); store.config.enabled = enabled;
+            store.message = "previous status".into();
+            assert!(store.accept_connection_test(7, &tested));
+            assert!(store.verified && !store.blocked);
+            assert_eq!((store.failures, store.next_retry_ms), (0, 0));
+            assert_eq!(store.status, expected);
+            assert_eq!(store.config.enabled, enabled);
+            assert_eq!(store.config.fingerprint, "pinned");
+            assert_eq!(serde_json::to_value(&store.queue).unwrap(), serde_json::to_value(&original.queue).unwrap());
+            assert_eq!(store.confirmed_credentials, original.confirmed_credentials);
+            if status == "syncing" { assert_eq!(store.message, "previous status"); }
+        }
+        for changed_connection in [false, true] {
+            let mut store = original.clone();
+            if changed_connection { store.config.host = "new.example.com".into(); }
+            else { store.revision += 1; } // saving even the same connection invalidates the old test.
+            let before = serde_json::to_value(&store).unwrap();
+            assert!(!store.accept_connection_test(7, &tested));
+            assert_eq!(serde_json::to_value(&store).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn login_backup_notes_use_exact_receipts_and_do_not_claim_upload_for_unconfirmed_passwords() {
+        let mut store = Store::default();
+        assert_eq!(store.login_backup_note("player", Some("saved")), None);
+        store.config.enabled = true;
+        assert_eq!(store.login_backup_note("player", None).as_deref(), Some("NAS 待补充密码"));
+        assert_eq!(store.login_backup_note("player", Some("saved")).as_deref(), Some("NAS 待验证登录"));
+        store.confirm_success("player", "saved", "登录确认").unwrap();
+        assert_eq!(store.login_backup_note("player", Some("saved")).as_deref(), Some("NAS 已排队"));
+        store.blocked = true; store.message = "连接失败".into();
+        assert_eq!(store.login_backup_note("player", Some("saved")).as_deref(), Some("NAS 同步未完成，记录已保留：连接失败"));
+        store.blocked = false; store.next_retry_ms = i64::MAX;
+        assert!(store.login_backup_note("player", Some("saved")).unwrap().contains("记录已保留"));
+        store.status = "syncing".into();
+        assert_eq!(store.login_backup_note("player", Some("saved")).as_deref(), Some("NAS 同步进行中"));
+        store.acknowledge(&store.queue.clone());
+        assert_eq!(store.login_backup_note("PLAYER", Some("saved")).as_deref(), Some("NAS 已同步"));
+        assert_eq!(store.login_backup_note("player", Some("different")).as_deref(), Some("NAS 待验证登录"));
+    }
+
+    #[test]
     fn input_and_legacy_queues_do_not_qualify_for_upload() {
         let mut store = Store::default();
         store.enqueue("legacy", "wrong-password", "旧版队列");
@@ -1363,7 +1506,7 @@ mod tests {
         let creds = BTreeMap::from([("player".into(), "not-yet-confirmed".into())]);
         let inventory = classify_inventory(&creds, &[], &store.confirmed_credentials);
         assert!(inventory.credentials.is_empty());
-        assert_eq!(inventory.unconfirmed, vec!["player"]);
+        assert_eq!(inventory.available, vec![("player".into(), "not-yet-confirmed".into())]);
         seed_inventory(&mut store, &inventory, "历史补传");
         assert!(store.queue.is_empty());
     }

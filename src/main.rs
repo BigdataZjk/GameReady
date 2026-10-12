@@ -1521,7 +1521,10 @@ fn watch_login(mut attempt: LoginAttempt, app: AppHandle) -> Result<(), String> 
             Ok(Some(account)) => {
                 let report = attempt.cover.take().expect("confirmed login has a prepared report");
                 let name = display_name(&account.persona_name, &account.account_name);
-                finish_login(&attempt, LoginResult::from_cover(name, Ok(report)), &app);
+                // 首次账号恢复期间 NAS 可能已完成；读取此刻状态，不重复上传。
+                let result = LoginResult::from_cover(name, Ok(report))
+                    .with_backup_note(backup::login_backup_note(&attempt.account, attempt.password.as_deref()));
+                finish_login(&attempt, result, &app);
             },
             Ok(None) => (), // 新操作拥有状态，旧尝试不能清除它。
             Err(error) => {
@@ -1555,6 +1558,11 @@ impl LoginResult {
             Err(error) => (false, format!("配置覆盖未完成：{error}")),
         };
         Self { message: format!("已登录 {name}，{note}"), name, ok, pending: false, generation: 0 }
+    }
+
+    fn with_backup_note(mut self, note: Option<String>) -> Self {
+        if let Some(note) = note { self.message.push_str(&format!("；{note}")); }
+        self
     }
 }
 
@@ -2345,6 +2353,24 @@ mod regression_tests {
         assert!(!partial.ok && partial.message.contains("已登录 player，配置覆盖未完成（1/2"));
         let failed = LoginResult::from_cover("player".into(), Err("当前账号已变化".into()));
         assert!(!failed.ok && failed.message.contains("当前账号已变化"));
+    }
+
+    #[test]
+    fn final_login_feedback_includes_nas_state_without_changing_steam_outcome() {
+        let report = CoverReport { total: 2, ok: 2, failed: Vec::new(), skipped_reason: None, auto_restarted: false };
+        let completed = LoginResult::from_cover("player".into(), Ok(report));
+        for note in ["NAS 已同步", "NAS 正在同步", "NAS 已排队", "NAS 同步失败：认证失败", "本地无密码，未自动同步 NAS"] {
+            let result = completed.clone().with_backup_note(Some(note.into()));
+            assert!(result.ok && !result.pending, "NAS state must not turn a completed Steam login into a failure");
+            assert_eq!(result.name, completed.name);
+            assert!(result.message.starts_with(&completed.message));
+            assert!(result.message.ends_with(note));
+        }
+        assert_eq!(completed.clone().with_backup_note(None).message, completed.message);
+        let failed_cover = LoginResult::from_cover("player".into(), Err("账号配置写入失败".into()))
+            .with_backup_note(Some("NAS 已同步".into()));
+        assert!(!failed_cover.ok && !failed_cover.pending);
+        assert!(failed_cover.message.contains("账号配置写入失败") && failed_cover.message.ends_with("NAS 已同步"));
     }
 
     #[test]
