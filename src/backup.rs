@@ -503,11 +503,12 @@ pub fn missing_password() {
     }
 }
 
-// 远程原有重复行取最后一行，随后用当前批次覆盖；任何坏行都停止写入。
+// 保留原账号顺序，新增账号逐个置顶；重复账号保留首次位置、使用最后密码。
 fn merge_remote(bytes: &[u8], pending: &[Pending]) -> Result<Vec<u8>> {
     let text = std::str::from_utf8(bytes).map_err(|_| error("format_error",
         "NAS 账号文件不是 UTF-8 文本，原文件未修改", false))?;
-    let mut accounts = BTreeMap::<String, (String, String)>::new();
+    let mut accounts = Vec::<(String, String)>::new();
+    let mut positions = BTreeMap::<String, usize>::new();
     for (line_no, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
         if line.is_empty() { continue; }
         let (account, password) = line.split_once("----").ok_or_else(|| error("format_error",
@@ -516,16 +517,23 @@ fn merge_remote(bytes: &[u8], pending: &[Pending]) -> Result<Vec<u8>> {
         if !valid_credential(account, password) {
             return Err(error("format_error", &format!("NAS 账号文件第 {} 行不完整，原文件未修改", line_no + 1), false));
         }
-        accounts.insert(account.to_ascii_lowercase(), (account.into(), password.into()));
+        let index = *positions.entry(account.to_ascii_lowercase()).or_insert(accounts.len());
+        let value = (account.into(), password.into());
+        if index == accounts.len() { accounts.push(value); } else { accounts[index] = value; }
     }
+    let original_len = accounts.len();
     for p in pending {
         if !valid_credential(&p.account, &p.password) {
             return Err(error("format_error", "本地队列中有无效凭据，队列和远程文件均已保留", false));
         }
-        accounts.insert(p.account.to_ascii_lowercase(), (p.account.clone(), p.password.clone()));
+        let index = *positions.entry(p.account.to_ascii_lowercase()).or_insert(accounts.len());
+        let value = (p.account.clone(), p.password.clone());
+        if index == accounts.len() { accounts.push(value); } else { accounts[index] = value; }
     }
     let mut output = String::new();
-    for (_, (account, password)) in accounts { output.push_str(&format!("{account}----{password}\n")); }
+    for (account, password) in accounts[original_len..].iter().rev().chain(&accounts[..original_len]) {
+        output.push_str(&format!("{account}----{password}\n"));
+    }
     if output.len() > MAX_REMOTE_BYTES { return Err(error("format_error", "合并后的账号文件超过 8 MiB，未写入", false)); }
     Ok(output.into_bytes())
 }
@@ -1193,7 +1201,7 @@ async fn probe_merge_and_retry_after_lost_confirmation() {
     assert_eq!(store.queue.len(), 1);
     f.files.lock().unwrap().fail_confirmation = false;
     remote.commit("/accounts.txt", "device-a", &store.queue).await.unwrap();
-    assert_eq!(f.files.lock().unwrap().files["/accounts.txt"], b"other----keep\nuser----latest\n");
+    assert_eq!(f.files.lock().unwrap().files["/accounts.txt"], b"user----latest\nother----keep\n");
     store.acknowledge(&store.queue.clone()); assert!(store.queue.is_empty());
     remote.close().await;
 }
@@ -1242,7 +1250,7 @@ async fn confirmed_login_syncs_over_sftp_and_reports_receipt_without_losing_remo
     assert!(store.queue.is_empty()); // worker skips an empty automatic queue instead of uploading again.
     {
         let files = f.files.lock().unwrap();
-        assert_eq!(files.files["/accounts.txt"], b"nas_only----keep\nplayer----verified-password\n");
+        assert_eq!(files.files["/accounts.txt"], b"player----verified-password\nnas_only----keep\n");
         assert!(!files.removed.iter().any(|p| p == "/accounts.txt"));
         assert!(!files.truncated.iter().any(|p| p == "/accounts.txt"));
         assert_eq!(files.files.len(), 1);
@@ -1313,7 +1321,24 @@ mod tests {
         let mut s = Store::default();
         s.enqueue("Player", " newest ---- with spaces ", "新增登录");
         let result = merge_remote(b"\xef\xbb\xbfplayer----old\r\nOTHER----keep\r\nPLAYER----later\r\n", &s.queue).unwrap();
-        assert_eq!(String::from_utf8(result).unwrap(), "OTHER----keep\nPlayer---- newest ---- with spaces \n");
+        assert_eq!(String::from_utf8(result).unwrap(), "Player---- newest ---- with spaces \nOTHER----keep\n");
+    }
+
+    #[test]
+    fn new_accounts_prepend_and_updates_keep_original_unsorted_positions() {
+        let original = b"zulu----z\nalpha----a\nmiddle----m\n";
+        assert_eq!(merge_remote(original, &[]).unwrap(), original);
+        let mut store = Store::default();
+        store.enqueue("alpha", "updated", "更新");
+        assert_eq!(merge_remote(original, &store.queue).unwrap(), b"zulu----z\nalpha----updated\nmiddle----m\n");
+        store.enqueue("new_z", "first", "新增");
+        store.enqueue("new_a", "second", "新增");
+        let merged = merge_remote(original, &store.queue).unwrap();
+        assert_eq!(merged, b"new_a----second\nnew_z----first\nzulu----z\nalpha----updated\nmiddle----m\n");
+        assert_eq!(merge_remote(&merged, &store.queue).unwrap(), merged);
+        store.queue.clear();
+        store.enqueue("NEW_Z", "changed", "更新顶部账号");
+        assert_eq!(merge_remote(&merged, &store.queue).unwrap(), b"new_a----second\nNEW_Z----changed\nzulu----z\nalpha----updated\nmiddle----m\n");
     }
 
     #[test]
