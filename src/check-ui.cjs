@@ -26,7 +26,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         unconfirmed_password_accounts: ['unconfirmed']
       };
       const emit = (name, payload) => (listeners[name] || []).forEach(fn => fn({ payload: clone(payload) }));
-      const publish = () => { snapshot.state_version++; emit('backup-changed', snapshot); };
+      const publish = () => {
+        snapshot.state_version++;
+        const event=clone(snapshot); event.config.password='';
+        emit('backup-changed',event);
+      };
       window.backupFixture = { snapshot, calls: [], accounts: [], loginResult: null, loginError: null,
         generation: 0, operation: null, status: { paths_valid: {}, steam_running: false, lol_guard_on: false },
         holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
@@ -77,6 +81,14 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             snapshot.message = args.account + '：密码已补充，可点击同步';
             publish(); emit('steam-accounts-changed', null);
             return clone(snapshot);
+          }
+          if(command === 'backup_save') {
+            snapshot.config=clone(args.config); snapshot.message='fixture saved'; publish();
+            const saved=clone(snapshot);
+            // Background work publishes a newer snapshot before the save IPC returns.
+            snapshot.config.fingerprint='fixture-pinned-key'; snapshot.status='syncing';
+            snapshot.message='fixture background work'; publish();
+            return saved;
           }
           if(command === 'backup_sync') {
             snapshot.status = 'syncing'; publish();
@@ -192,6 +204,84 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('#backupAccountPassword').count(), 0);
     assert.equal(await page.evaluate(() => backupPasswordDraft), '');
     console.log('PASS save error feedback, retry input retention, cancel clears password');
+
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      backupSnapshot=null; backupResult=null;
+      f.snapshot.status='idle'; f.snapshot.last_success_ms=Date.now(); f.snapshot.message='fixture previous upload';
+      toast('fixture baseline'); f.publish();
+    });
+    assert.equal(await page.locator('#tkTxt').textContent(),'fixture baseline','Initial snapshots must not announce historical success');
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      setBackupFeedback('旧手动成功结果','success',true);
+      f.snapshot.status='syncing'; f.publish();
+      f.snapshot.status='idle'; f.snapshot.last_success_ms+=1; f.snapshot.message='fixture completed'; f.publish();
+    });
+    assert.equal(await page.locator('#tkTxt').textContent(),'NAS 自动备份完成：fixture completed');
+    assert.equal(await page.locator('#backupFeedback').textContent(),'NAS 自动备份完成：fixture completed');
+    await assertFeedbackVisible('success');
+    await page.evaluate(() => {
+      const f=window.backupFixture; toast('fixture keep newer activity');
+      f.emit('backup-changed',f.snapshot);
+      const stale=structuredClone(f.snapshot);stale.state_version--;stale.last_success_ms+=100;stale.message='stale success';
+      f.emit('backup-changed',stale);
+      f.snapshot.message='fixture inventory refresh';f.publish();
+    });
+    assert.equal(await page.locator('#tkTxt').textContent(),'fixture keep newer activity','Duplicate, stale, and unrelated snapshots must stay silent');
+    assert.equal(await page.locator('#backupFeedback').textContent(),'NAS 自动备份完成：fixture completed');
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.snapshot.status='syncing';f.publish();
+      f.snapshot.status='network_error';f.snapshot.message='fixture connection failed';
+      f.snapshot.next_retry_ms=Date.now()+60000;f.publish();
+    });
+    assert.match(await page.locator('#tkTxt').textContent(),/^NAS 自动同步失败：fixture connection failed/);
+    assert.match(await page.locator('#backupFeedback').textContent(),/^NAS 自动同步失败：fixture connection failed/);
+    assert.equal(await page.locator('#backupIndicator').getAttribute('data-state'),'warning');
+    await assertFeedbackVisible('error');
+    await page.evaluate(() => {
+      const f=window.backupFixture;toast('fixture duplicate error must stay silent');
+      f.emit('backup-changed',f.snapshot);f.publish();
+    });
+    assert.equal(await page.locator('#tkTxt').textContent(),'fixture duplicate error must stay silent');
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.snapshot.status='auth_error'; f.snapshot.next_retry_ms=0; f.snapshot.message='fixture authentication failed'; f.publish();
+      toast('fixture password-only operation');
+      f.snapshot.message='fixture password saved'; f.publish();
+    });
+    assert.equal(await page.locator('#tkTxt').textContent(),'fixture password-only operation','Changing a password during an existing error is not a new sync failure');
+    await page.evaluate(() => {
+      const f=window.backupFixture;progStart(()=>'fixture login still running');
+      f.snapshot.status='idle';f.snapshot.last_success_ms+=1;f.snapshot.next_retry_ms=0;
+      f.snapshot.message='fixture recovered';f.publish();
+    });
+    assert.equal(await page.locator('#tkTxt').textContent(),'NAS 自动备份完成：fixture recovered');
+    assert.equal(await page.evaluate(() => progTimer !== null),true,'NAS notifications cannot stop an active Steam operation');
+    await page.evaluate(() => progStop());
+    console.log('PASS automatic NAS outcomes are visible, replace stale pinned results, and ignore duplicate/startup snapshots');
+
+    await page.locator('#backupConfigTab').click();
+    await page.locator('#backupHost').fill('updated.example.test');
+    assert.equal(await page.evaluate(() => backupDirty),true);
+    await page.locator('#backupSave').click();
+    await page.waitForFunction(() => !backupBusy);
+    assert.equal(await page.evaluate(() => backupDirty),false,'A successful stale save response must still clear saved draft state');
+    assert.equal(await page.locator('#backupHost').inputValue(),'updated.example.test');
+    assert.equal(await page.locator('#backupPassword').inputValue(),'fixture-nas-password','Sanitized events must never clear the saved NAS password form');
+    assert.equal(await page.evaluate(() => backupFingerprint),'fixture-pinned-key','The newer saved configuration wins over the stale save response');
+    assert.equal(await page.evaluate(() => backupSnapshot.status),'syncing');
+    await page.evaluate(() => {
+      const stale=structuredClone(window.backupFixture.snapshot); stale.state_version--;
+      stale.config.host='stale.example.test';stale.config.password='stale-fixture-password';
+      applyBackup(stale,true);
+    });
+    assert.equal(await page.locator('#backupHost').inputValue(),'updated.example.test','A delayed full query cannot overwrite the current form');
+    assert.equal(await page.locator('#backupPassword').inputValue(),'fixture-nas-password');
+    await page.evaluate(() => {const f=window.backupFixture;f.snapshot.status='idle';f.publish();});
+    await page.locator('#backupQueueTab').click();
+    console.log('PASS configuration save race keeps the latest snapshot and clears dirty state');
 
     await page.screenshot({ path: path.resolve(__dirname, '../target/backup-sync-ui.png') });
     await page.locator('#closeBackup').click();

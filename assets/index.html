@@ -469,7 +469,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.7</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.8</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -624,7 +624,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.7</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.8</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -1303,7 +1303,7 @@ $('doLogin').addEventListener('click', async ()=>{
 
 /* ---------- Steam 账号备份：配置、持久队列与后台状态 ---------- */
 let backupReturnFocus = null;
-let backupDirty = false, backupBusy = false, backupFingerprint = '', backupSnapshot = null;
+let backupDirty = false, backupBusy = false, backupFingerprint = '', backupSnapshot = null, backupActionKind = null;
 let backupTestConfig = null;
 let backupSyncAccount = null, backupPasswordAccount = null, backupPasswordDraft = '';
 let backupResult = null;
@@ -1319,6 +1319,9 @@ function setBackupFeedback(message,tone='info',pin=false){
 function sameBackupConnection(a,b){
   return !!a && !!b && ['host','port','username','password','remote_path'].every(key=>a[key]===b[key]);
 }
+function backupFailed(snapshot){
+  return !!snapshot?.status && !['disabled','idle','pending','syncing'].includes(snapshot.status);
+}
 function setBackupTestStatus(status){
   const label = {untested:'当前配置尚未测试',testing:'正在测试连接',passed:'本次连接测试通过',failed:'本次连接测试失败'}[status];
   $('backupTestLight').dataset.state = status;
@@ -1328,7 +1331,7 @@ function setBackupTestStatus(status){
 }
 function updateBackupIndicator(snapshot, unavailable){
   const enabled = !!(snapshot && snapshot.config && snapshot.config.enabled);
-  const ready = enabled && !!snapshot.config_verified && !unavailable;
+  const ready = enabled && !!snapshot.config_verified && !unavailable && !backupFailed(snapshot);
   const status = unavailable ? 'warning' : !enabled ? 'disabled' : ready ? 'ready' : 'warning';
   const message = unavailable ? '备份配置读取失败' : !enabled ? '自动备份未开启'
     : ready ? '自动备份已开启，配置验证通过' : '自动备份已开启，配置未验证或连接异常';
@@ -1460,7 +1463,12 @@ function backupConfig(){
 function applyBackup(snapshot, fill){
   if(!snapshot) return;
   // 较慢的查询响应不能覆盖刚收到的同步完成/补密码事件。
-  if((snapshot.state_version ?? 0)<(backupSnapshot?.state_version ?? 0)) return;
+  const previous=backupSnapshot;
+  if((snapshot.state_version ?? 0)<(previous?.state_version ?? 0)) return;
+  const newer=previous && (snapshot.state_version ?? 0)>(previous.state_version ?? 0);
+  const succeeded=newer && ['idle','pending'].includes(snapshot.status) &&
+    (snapshot.last_success_ms || 0)>(previous.last_success_ms || 0);
+  const failed=newer && backupFailed(snapshot) && (snapshot.status!==previous.status || snapshot.next_retry_ms!==previous.next_retry_ms);
   backupSnapshot = snapshot;
   updateBackupIndicator(snapshot);
   renderBackupQueue(snapshot.queue || [],snapshot.missing_password_accounts || [],snapshot.unconfirmed_password_accounts || []);
@@ -1469,8 +1477,12 @@ function applyBackup(snapshot, fill){
   let message = snapshot.message || '';
   if(snapshot.inventory_error) message += '；'+snapshot.inventory_error;
   if(snapshot.next_retry_ms > Date.now()) message += '（下次 '+fmtHM(new Date(snapshot.next_retry_ms))+' 重试）';
-  if(backupResult) renderBackupFeedback(backupResult.message,backupResult.tone);
-  else renderBackupFeedback(message);
+  if((succeeded || failed) && backupActionKind!=='sync'){
+    const result=(failed?'NAS 自动同步失败：':'NAS 自动备份完成：')+message;
+    setBackupFeedback(result,failed?'error':'success',true);
+    toast(result,failed?'err':'ok');
+  }else if(backupResult) renderBackupFeedback(backupResult.message,backupResult.tone);
+  else renderBackupFeedback(message,backupFailed(snapshot) || snapshot.inventory_error?'error':'info');
   if(fill){
     const c=snapshot.config || {};
     $('backupHost').value=c.host || '';
@@ -1504,6 +1516,7 @@ async function backupAction(action,account=null){
   const id=action==='test'?'backupTest':action==='save'?'backupSave':'backupSync';
   const button=$(id), original=button.textContent;
   backupBusy=true;
+  backupActionKind=action;
   backupSyncAccount=action==='sync'?account:null;
   redrawBackupQueue();
   ['backupTest','backupSave','backupSync'].forEach(n=>$(n).disabled=true);
@@ -1520,7 +1533,9 @@ async function backupAction(action,account=null){
       setBackupFeedback(report.message+'；保存配置后生效','success',true);
     }else if(action==='save'){
       const snapshot=await invoke('backup_save',{config});
-      applyBackup(snapshot,true);
+      backupDirty=false; // 保存已成功；事件快照隐藏密码，只从完整 IPC 响应填回表单。
+      if((snapshot.state_version ?? 0)<(backupSnapshot?.state_version ?? 0)) await refreshBackup(true);
+      else applyBackup(snapshot,true);
     }else{
       const snapshot=await invoke('backup_sync',{account});
       applyBackup(snapshot,false);
@@ -1535,6 +1550,7 @@ async function backupAction(action,account=null){
   }
   finally{
     backupBusy=false;
+    backupActionKind=null;
     backupSyncAccount=null;
     ['backupTest','backupSave','backupSync'].forEach(n=>$(n).disabled=false);
     ['backupHost','backupPort','backupUser','backupPassword','backupRemotePath','backupEnabled'].forEach(n=>$(n).disabled=false);
@@ -1846,11 +1862,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.7';
+  let v = '0.1.8';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.7 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.8 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();
