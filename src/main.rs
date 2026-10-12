@@ -2394,10 +2394,11 @@ mod regression_tests {
 
     #[test]
     fn embedded_steam_templates_enable_overlay_and_disable_restore_tabs_without_losing_other_settings() {
-        for pack in FILES.iter().filter(|p| p.scope != PackScope::Lol) {
+        for pack in FILES.iter().filter(|p| p.scope != PackScope::Lol && !p.rel.ends_with("sharedconfig.vdf")) {
             // 同时覆盖旧版账号根名修复和全局配置；额外字段不能被模板清掉。
             let original = br#""InstallConfigStore" {
                 "system" { "EnableGameOverlay" "0" "InGameOverlayRestoreBrowserTabs" "1" "Unrelated" "keep" }
+                "news" { "NotifyAvailableGames" "1" "OtherNewsSetting" "keep" }
                 "Software" { "Valve" { "Steam" { "OtherPreference" "keep" } } }
             }"#;
             let merged = vdf::merge(original, pack.bytes).unwrap();
@@ -2410,8 +2411,29 @@ mod regression_tests {
             }
             assert!(text.contains("\"Unrelated\"\t\t\"keep\""));
             assert!(text.contains("\"OtherPreference\"\t\t\"keep\""));
+            assert!(text.contains("\"NotifyAvailableGames\"\t\t\"0\""));
+            assert!(!text.contains("\"NotifyAvailableGames\"\t\t\"1\""));
+            assert!(text.contains("\"OtherNewsSetting\"\t\t\"keep\""));
             assert_eq!(vdf::merge(&merged, pack.bytes).unwrap(), merged);
         }
+    }
+
+    #[test]
+    fn roaming_template_selects_library_and_never_toasts_preserving_other_settings() {
+        let pack = FILES.iter().find(|p| p.rel.ends_with("sharedconfig.vdf")).unwrap();
+        assert_eq!(pack.scope, PackScope::SteamAccount);
+        let original = br##""UserRoamingConfigStore" {
+            "DisableAllToasts" "0" "DisableToastsInGame" "0" "OtherSetting" "keep"
+            "Software" { "Valve" { "Steam" { "SteamDefaultDialog" "#app_store" "OtherPreference" "keep" } } }
+        }"##;
+        let merged = vdf::merge(original, pack.bytes).unwrap();
+        let text = std::str::from_utf8(&merged).unwrap();
+        for (key, value) in [("DisableAllToasts", "1"), ("DisableToastsInGame", "1"), ("SteamDefaultDialog", "#app_games"),
+            ("OtherSetting", "keep"), ("OtherPreference", "keep")] {
+            assert!(text.contains(&format!("\"{key}\"\t\t\"{value}\"")));
+        }
+        assert!(!text.contains("#app_store"));
+        assert_eq!(vdf::merge(&merged, pack.bytes).unwrap(), merged);
     }
 
     #[test]
@@ -2432,8 +2454,8 @@ mod regression_tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, original.as_bytes()).unwrap();
         let report = write_all(&dir, PackScope::SteamAccount, Some("1"));
-        assert_eq!(report.len(), 1);
-        assert!(report[0].ok && report[0].err.is_none());
+        assert_eq!(report.len(), 2);
+        assert!(report.iter().all(|r| r.ok && r.err.is_none()));
         let updated = fs::read(&path).unwrap();
         assert_ne!(updated, original.as_bytes());
         assert!(std::str::from_utf8(&updated).unwrap().starts_with("\"UserLocalConfigStore\""));
@@ -2454,7 +2476,8 @@ mod regression_tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             for changed in [false, true] {
                 let template = std::str::from_utf8(pack.bytes).unwrap();
-                let original = if changed { template.replacen("\"EnableGameOverlay\"\t\t\"1\"", "\"EnableGameOverlay\"\t\t\"0\"", 1) }
+                let key = if pack.rel.ends_with("sharedconfig.vdf") { "DisableAllToasts" } else { "EnableGameOverlay" };
+                let original = if changed { template.replacen(&format!("\"{key}\"\t\t\"1\""), &format!("\"{key}\"\t\t\"0\""), 1) }
                     else { template.to_string() };
                 assert_eq!(original != template, changed);
                 fs::write(&path, original.as_bytes()).unwrap();
@@ -2464,10 +2487,10 @@ mod regression_tests {
                 let before = fs::metadata(&path).unwrap().modified().unwrap();
                 let guard = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ.0).open(&path).unwrap();
                 let report = write_all(&dir, pack.scope, Some("1"));
-                assert_eq!(report.len(), 1);
-                assert_eq!(report[0].ok, !changed);
-                if changed { assert!(report[0].err.as_deref().unwrap().contains("写入失败")); }
-                else { assert!(report[0].err.is_none()); }
+                let result = report.iter().find(|r| r.rel == pack.rel.replace("{SID3}", "1")).unwrap();
+                assert_eq!(result.ok, !changed);
+                if changed { assert!(result.err.as_deref().unwrap().contains("写入失败")); }
+                else { assert!(result.err.is_none()); }
                 assert_eq!(fs::read(&path).unwrap(), original.as_bytes());
                 assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
                 assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);

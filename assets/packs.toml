@@ -1991,6 +1991,10 @@ crlf = true
 content = '''
 "InstallConfigStore"
 {
+	"news"
+	{
+		"NotifyAvailableGames"		"0"
+	}
 	"system"
 	{
 		"EnableGameOverlay"		"1"
@@ -2017,6 +2021,10 @@ crlf = true
 content = '''
 "UserLocalConfigStore"
 {
+	"news"
+	{
+		"NotifyAvailableGames"		"0"
+	}
 	"system"
 	{
 		"EnableGameOverlay"		"1"
@@ -2042,6 +2050,28 @@ content = '''
 		"ChatFlashMode"		"0"
 		"DoNotDisturb"		"0"
 		"SignIntoFriends"		"0"
+	}
+}
+'''
+
+[[pack]]
+path = 'userdata\{SID3}\7\remote\sharedconfig.vdf'
+scope = 'SteamAccount'
+crlf = true
+content = '''
+"UserRoamingConfigStore"
+{
+	"DisableAllToasts"		"1"
+	"DisableToastsInGame"		"1"
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"SteamDefaultDialog"		"#app_games"
+			}
+		}
 	}
 }
 '''
