@@ -294,7 +294,6 @@ fn main() {
             let menu = Menu::with_items(app, &[&show, &quit])?;
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().cloned().expect("缺默认图标"))
-                .tooltip("GameReady")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {

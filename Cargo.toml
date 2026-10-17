@@ -1,6 +1,6 @@
 [package]
 name = "gameready"
-version = "0.1.14"
+version = "0.1.15"
 description = "GameReady - 一键就绪 · 开局即战"
 edition = "2021"
 
