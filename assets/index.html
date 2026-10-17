@@ -42,19 +42,6 @@ body.preview .window{
 #btnMin{ font-size:0; }   /* 走查：U+2500 字形垂直偏上，改伪元素画线居中 */
 #btnMin::after{ content:""; display:block; width:10px; height:1px; background:currentColor; margin:0 auto; }
 /* 最小化/关闭：纯功能按钮，无 :hover 反馈（2026-09-29 用户定稿） */
-/* 自定义 tooltip：替代系统白色 title 气泡（深色主题样式） */
-[data-tip]{ position:relative; }
-[data-tip]:hover::after{
-  content:attr(data-tip);
-  position:absolute; left:calc(100% + 10px); top:50%; transform:translateY(-50%);
-  background:#141c2b; border:1px solid #2c3a50; color:var(--txt);
-  font-size:11px; font-family:"Segoe UI","Microsoft YaHei",sans-serif; font-weight:400;
-  padding:4px 10px; border-radius:6px; white-space:nowrap;
-  z-index:99; pointer-events:none; box-shadow:0 4px 16px rgba(0,0,0,.55);
-}
-[data-tip][data-tip-pos="b"]:hover::after{
-  left:50%; top:calc(100% + 8px); transform:translateX(-50%);
-}
 /* ---- 主体 ---- */
 .main{ flex:1; display:flex; min-height:0; }
 .rail{
@@ -96,7 +83,6 @@ body.preview .window{
   animation:slot-breathe 1.6s ease-in-out infinite; }
 @keyframes slot-breathe{ 0%,100%{ opacity:.65; } 50%{ opacity:1; } }
 body.rail-dragging{ cursor:grabbing; }
-body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹 tooltip */
 /* R1 进程活跃状态点：绿点外圈脉冲=运行中，灰=未运行（由后端 game-active 事件驱动，非点击演示）。
    回归走查：原左上角(top/left:-3px)脉冲光环被窗口边缘裁成不对称，改挂右上角（右侧有内容区空间） */
 .live-dot{
@@ -307,7 +293,6 @@ body.rail-dragging [data-tip]:hover::after{ display:none; }   /* 拖拽中不弹
 .backup-entry .backup-indicator{ width:12px; height:12px; margin-left:3px; flex:none; color:var(--txt3); }
 .backup-indicator[data-state="ready"]{ color:var(--ok); }
 .backup-indicator[data-state="warning"]{ color:var(--warn); }
-.backup-entry[data-tip-pos="b"]:hover::after{ left:auto; right:0; transform:none; }
 .backup-modal{ width:396px; height:552px; max-width:calc(100% - 32px); max-height:calc(100% - 64px); }
 .backup-modal [hidden]{ display:none !important; }
 .backup-modal .modal-head{ padding-bottom:6px; }
@@ -472,25 +457,25 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.14</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.15</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
   <div class="main">
     <!-- 左列导航：顶部游戏 icon（带 R1 活跃点，事件驱动），底部工具 -->
     <div class="rail">
-      <div class="game" id="nav-lol" style="--c:var(--lol)" data-tip="英雄联盟" onclick="location.hash='lol'">
+      <div class="game" id="nav-lol" style="--c:var(--lol)" aria-label="英雄联盟" onclick="location.hash='lol'">
         <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="11.5" fill="none" stroke="#ffc247" stroke-width="1.8"/><text x="13" y="17" text-anchor="middle" font-size="8.5" font-weight="700" fill="#ffc247" font-family="Segoe UI">LOL</text></svg>
         <span class="live-dot off" id="lolDot"></span>
       </div>
-      <div class="game" id="nav-steam" style="--c:var(--steam)" data-tip="Steam" onclick="location.hash='steam'">
+      <div class="game" id="nav-steam" style="--c:var(--steam)" aria-label="Steam" onclick="location.hash='steam'">
         <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="11.5" fill="none" stroke="#5aa2ff" stroke-width="1.8"/><circle cx="10" cy="15" r="3.2" fill="none" stroke="#5aa2ff" stroke-width="1.6"/><path d="M12 12 18 7.5" stroke="#5aa2ff" stroke-width="1.6" stroke-linecap="round"/><circle cx="18" cy="7.5" r="2" fill="#5aa2ff"/></svg>
         <span class="live-dot off" id="steamDot"></span>
       </div>
       <div class="spacer" id="railSpacer"></div>
-      <div class="tool" id="nav-logs" data-tip="覆盖日志" onclick="location.hash='logs'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
-      <div class="tool" id="nav-settings" data-tip="设置" onclick="location.hash='settings'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg></div>
-      <div class="tool" id="nav-about" data-tip="关于" onclick="location.hash='about'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r=".5" fill="currentColor"/></svg></div>
+      <div class="tool" id="nav-logs" aria-label="覆盖日志" onclick="location.hash='logs'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
+      <div class="tool" id="nav-settings" aria-label="设置" onclick="location.hash='settings'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg></div>
+      <div class="tool" id="nav-about" aria-label="关于" onclick="location.hash='about'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r=".5" fill="currentColor"/></svg></div>
     </div>
     <div class="content">
       <!-- ================ LOL 主页 ================ -->
@@ -505,7 +490,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           <span class="mini-link" onclick="openPath('lol')">修改</span>
         </div>
         <div class="power-zone">
-          <button class="power-btn pbtn-lol" id="lolBtn" data-tip="开启 / 关闭配置守护" data-tip-pos="b">
+          <button class="power-btn pbtn-lol" id="lolBtn" aria-label="开启 / 关闭配置守护">
             <svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.6 6.2a8 8 0 1 0 10.8 0"/></svg>
           </button>
           <div class="power-hint" id="lolHint">点击开启配置守护</div>
@@ -545,13 +530,13 @@ body.preview.backup-review .window{ flex-shrink:0; }
              「当前登录」标记仅当 Steam 进程活跃 且 登录态为该账号 时显示 -->
         <div class="acct-panel">
           <div class="ap-head"><span class="ap-title">STEAM 账号</span><span class="cnt" id="acctCnt">—</span>
-            <button type="button" class="mini-link backup-entry" id="openBackup" aria-label="账号备份：未开启" data-tip="自动备份未开启" data-tip-pos="b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H5a4 4 0 0 1-.5-8A7 7 0 0 1 18 8a5 5 0 0 1 1 10h-2M12 20V11m-3 3 3-3 3 3"/></svg>账号备份<svg id="backupIndicator" class="backup-indicator" data-state="disabled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></button>
+            <button type="button" class="mini-link backup-entry" id="openBackup" aria-label="账号备份：未开启"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H5a4 4 0 0 1-.5-8A7 7 0 0 1 18 8a5 5 0 0 1 1 10h-2M12 20V11m-3 3 3-3 3 3"/></svg>账号备份<svg id="backupIndicator" class="backup-indicator" data-state="disabled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></button>
           </div>
           <!-- 新增登录：账号 + 密码 + 识别 + 登录 -->
           <div class="add-row">
             <input type="text" id="fUser" placeholder="账号" autocomplete="off" spellcheck="false">
             <input type="text" id="fPass" placeholder="密码" autocomplete="off" spellcheck="false">
-            <button class="btn" type="button" id="recognizeLogin" disabled title="剪贴板中未识别到单行账号密码">识别</button>
+            <button class="btn" type="button" id="recognizeLogin" disabled>识别</button>
             <button class="btn primary" type="button" id="doLogin">登 录</button>
           </div>
           <div class="ap-list" id="acctCards"></div>
@@ -628,7 +613,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.14</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.15</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -947,7 +932,7 @@ render();
 /* ---------- R1 进程活跃绿点（game-active 事件驱动） ---------- */
 function setDot(dot, active){
   dot.classList.toggle('off', !active);
-  dot.dataset.tip = active ? '游戏运行中' : '未检测到游戏进程';
+  dot.setAttribute('aria-label',active ? '游戏运行中' : '未检测到游戏进程');
 }
 
 /* ---------- 状态 / 设置落地 ---------- */
@@ -1362,7 +1347,6 @@ function updateRecognitionButton(){
   const button=$('recognizeLogin');
   button.disabled=steamBusy() || recognizeBusy || !clipboardCredentials;
   button.classList.toggle('primary',!button.disabled);
-  button.title=clipboardCredentials?'已识别账号密码，点击填入':'剪贴板中未识别到单行账号密码';
 }
 function clearLoginClipboard(){clipboardEpoch++;clipboardSequence=null;clipboardCredentials=null;updateRecognitionButton();}
 async function refreshLoginClipboard(force=false){
@@ -1461,7 +1445,6 @@ function updateBackupIndicator(snapshot, unavailable){
     ? '<path d="m7 12 3 3 7-7"/>' : status==='warning'
     ? '<path d="M12 7v6"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>'
     : '<path d="M8 12h8"/>');
-  $('openBackup').dataset.tip = message;
   $('openBackup').setAttribute('aria-label','账号备份：'+message);
 }
 function renderBackupQueue(rows,missing,unconfirmed){
@@ -1764,7 +1747,6 @@ function entryEl(lg){
   const body = el('div','e-body');
   const title = el('div','e-title');
   const tt = el('span','tt', lg.title || '');
-  if(lg.title){ tt.dataset.tip = lg.title; tt.dataset.tipPos = 'b'; }   // 走查：两行 clamp 后极端长标题悬停看全文
   title.appendChild(tt);
   title.appendChild(el('span','tag '+km.cls, km.label));
   title.appendChild(el('span','tag '+(lg.ok?'ok':'err'), lg.ok?'成功':'失败'));
@@ -1982,11 +1964,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.14';
+  let v = '0.1.15';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.14 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.15 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();
