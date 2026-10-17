@@ -273,6 +273,7 @@ fn main() {
             commands::stop,
             commands::steam_cover,
             commands::accounts_list,
+            commands::account_password,
             commands::switch_account,
             commands::delete_account,
             commands::login_new,
@@ -1112,10 +1113,11 @@ fn session_account(root: &str, sid64: &str, history: &[RawAccount]) -> Result<Op
 fn accounts_for_root(root: &str) -> Result<Vec<SteamAccount>, String> {
     let history = login_history(root)?;
     let mut accounts: Vec<_> = history.iter().map(to_account).collect();
-    if let Some(sid64) = active_steam_sid3(root).and_then(|sid| sid3_to_id64(&sid)) {
-        if !accounts.iter().any(|a| a.steam_id64 == sid64) {
-            if let Some(account) = session_account(root, &sid64, &history)? { accounts.push(account); }
-        }
+    if let Some(sid3) = active_steam_sid3(root) {
+        let sid64 = sid3_to_id64(&sid3).ok_or("当前 Steam 账号无效")?;
+        if let Some(account) = accounts.iter_mut().find(|a| a.steam_id64 == sid64) {
+            account.timestamp = account.timestamp.max(read_login_success(root, &sid3, 0, 0).unwrap_or(0));
+        } else if let Some(account) = session_account(root, &sid64, &history)? { accounts.push(account); }
     }
     Ok(accounts)
 }
@@ -3007,6 +3009,14 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
 #[tauri::command]
 pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
     match steam_root_or_err() { Ok(root) => accounts_for_root(&root), Err(_) => Ok(Vec::new()) }
+}
+
+#[tauri::command]
+pub fn account_password(sid64: String) -> Result<String, String> {
+    let account = accounts_for_root(&steam_root_or_err()?)?.into_iter().find(|a| a.steam_id64 == sid64)
+        .ok_or("账号不存在，请刷新列表后重试")?;
+    get_cred(&account.account_name).filter(|password| !password.is_empty())
+        .ok_or_else(|| "本机未保存该账号的可用密码，请先补充密码".into())
 }
 
 /// 登录准备在后台线程执行；验证码和服务器等待由可取消的确认线程处理。
