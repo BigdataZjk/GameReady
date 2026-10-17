@@ -274,6 +274,7 @@ fn main() {
             commands::steam_cover,
             commands::accounts_list,
             commands::account_password,
+            commands::clipboard_read,
             commands::switch_account,
             commands::delete_account,
             commands::login_new,
@@ -3017,6 +3018,43 @@ pub fn account_password(sid64: String) -> Result<String, String> {
         .ok_or("账号不存在，请刷新列表后重试")?;
     get_cred(&account.account_name).filter(|password| !password.is_empty())
         .ok_or_else(|| "本机未保存该账号的可用密码，请先补充密码".into())
+}
+
+#[derive(Serialize)]
+pub struct ClipboardText {
+    sequence: u32,
+    text: Option<String>,
+}
+
+#[tauri::command]
+pub fn clipboard_read(sequence: Option<u32>) -> Result<Option<ClipboardText>, String> {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard { fn drop(&mut self) { unsafe { let _ = CloseClipboard(); } } }
+    // Windows 标准 Unicode 文本格式；只读并限制长度，不改变剪贴板或写入日志。
+    const UNICODE_TEXT: u32 = 13;
+    unsafe {
+        if sequence == Some(GetClipboardSequenceNumber()) { return Ok(None); }
+        OpenClipboard(None).map_err(|_| "剪贴板暂时不可读".to_string())?;
+        let _guard = ClipboardGuard;
+        let sequence = GetClipboardSequenceNumber();
+        let mut snapshot = ClipboardText { sequence, text: None };
+        if IsClipboardFormatAvailable(UNICODE_TEXT).is_err() { return Ok(Some(snapshot)); }
+        let memory = HGLOBAL(GetClipboardData(UNICODE_TEXT).map_err(|_| "读取剪贴板失败")?.0);
+        let size = GlobalSize(memory) / 2;
+        if size == 0 || size > 8192 { return Ok(Some(snapshot)); }
+        let pointer = GlobalLock(memory).cast::<u16>();
+        if pointer.is_null() { return Err("读取剪贴板失败".into()); }
+        let units = std::slice::from_raw_parts(pointer, size);
+        let end = units.iter().position(|c| *c == 0).unwrap_or(size);
+        snapshot.text = String::from_utf16(&units[..end]).ok();
+        let _ = GlobalUnlock(memory);
+        // 延迟渲染文本可能改变序号，缓存最终序号，避免遗漏后续变化。
+        snapshot.sequence = GetClipboardSequenceNumber();
+        Ok(Some(snapshot))
+    }
 }
 
 /// 登录准备在后台线程执行；验证码和服务器等待由可取消的确认线程处理。

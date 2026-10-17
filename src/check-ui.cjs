@@ -34,8 +34,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       window.backupFixture = { snapshot, calls: [], accounts: [], loginResult: null, loginError: null,
         generation: 0, operation: null, status: { paths_valid: {}, steam_running: false, lol_guard_on: false },
         holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
-        failSync: false, failSave: false, emit, publish };
-      Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.backupFixture.copied=value}});
+        failSync: false, failSave: false, clipboardText:null, clipboardSequence:0, emit, publish };
+      Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{
+        const f=window.backupFixture;f.copied=value;f.clipboardText=value;f.clipboardSequence++;
+      }}});
       window.__TAURI__ = {
         event: { listen: async (name, fn) => { (listeners[name] ||= []).push(fn); return () => {}; } },
         dialog: { open: async () => null },
@@ -50,6 +52,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
           }
           if(command === 'get_settings') return { accent: '#00e5ff', close_behavior: 'tray' };
           if(command === 'accounts_list') return clone(window.backupFixture.accounts);
+          if(command === 'clipboard_read') {
+            const f=window.backupFixture;
+            if(f.clipboardFail) throw new Error('fixture clipboard is locked');
+            const result=args.sequence===f.clipboardSequence?null:{sequence:f.clipboardSequence,text:f.clipboardText};
+            if(f.holdClipboard) return new Promise(resolve=>f.releaseClipboard=()=>resolve(clone(result)));
+            return clone(result);
+          }
           if(command === 'account_password') {
             if(window.backupFixture.passwordMissing) throw {message:'本机未保存该账号的可用密码，请先补充密码'};
             return ' visible ---- password ';
@@ -122,6 +131,66 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.goto(pathToFileURL(path.resolve(__dirname, '../assets/index.html')).href + '#steam');
     // App startup intentionally selects the first game tab instead of the URL hash.
     await page.locator('#nav-steam').click();
+    assert.equal(await page.locator('#doLogin').evaluate(button=>button.previousElementSibling.id),'recognizeLogin');
+    const parseCases=[
+      ['player---Pass!1','player','Pass!1'],['steam_user----------p_a---ss','steam_user','p_a---ss'],
+      ['player@@@@P@ss','player','P@ss'],['player____Pass!1','player','Pass!1'],['player💥💥p:word','player','p:word'],
+      ['player    pass with spaces','player','pass with spaces'],['player\tPass!1','player','Pass!1'],
+      ['player - Pass!1','player','Pass!1'],['player|Pass!1','player','Pass!1'],['player：Pass!1','player','Pass!1'],
+      ['player|P@@ss','player','P@@ss'],['player p@@ss','player','p@@ss'],
+      ['账号: {player} 密码: {P@ss---!}','player','P@ss---!'],['Steam账号：player，密码：P@ss!','player','P@ss!'],
+      ['Account = player; Password = " a b "','player',' a b '],['密码: P@ss! 账号: player','player','P@ss!'],
+      ['用户名 player 密码 Pass!1','player','Pass!1'],['user@example.test====P@ss!','user@example.test','P@ss!'],
+      ['{"account":"player","password":" p : 123 "}','player',' p : 123 '],['player---Pass!1\r\n','player','Pass!1']
+    ];
+    for(const [text,account,password] of parseCases){
+      assert.deepEqual(await page.evaluate(value=>parseLoginClipboard(value),text),{account,password});
+    }
+    for(const text of [null,'','ordinarytext','只有一段说明','player--','player---','player@@@@','---secret','player\npassword',
+      'https://example.test/page','C:\\folder\\file','user____name----pass']){
+      assert.equal(await page.evaluate(value=>parseLoginClipboard(value),text),null);
+    }
+    assert.deepEqual(await page.evaluate(()=>parseLoginClipboard('user____name----pass',['user____name'])),
+      {account:'user____name',password:'pass'});
+    assert.equal(await page.locator('#recognizeLogin').isDisabled(),true);
+    async function fixtureClipboard(text,fail=false){
+      await page.evaluate(async ({text,fail})=>{
+        const f=window.backupFixture;f.clipboardText=text;f.clipboardSequence++;f.clipboardFail=fail;
+        await refreshLoginClipboard();
+      },{text,fail});
+    }
+    await fixtureClipboard('player----first-password');
+    assert.equal(await page.locator('#recognizeLogin').isEnabled(),true);
+    await page.locator('#recognizeLogin').click();
+    await page.waitForFunction(()=>document.querySelector('#fUser').value==='player');
+    assert.equal(await page.locator('#fPass').inputValue(),'first-password');
+    assert.equal(await page.locator('#fPass').getAttribute('type'),'text');
+    await page.evaluate(()=>{const f=window.backupFixture;f.clipboardText='changed:::latest-password';f.clipboardSequence++;});
+    await page.locator('#recognizeLogin').click();
+    await page.waitForFunction(()=>document.querySelector('#fUser').value==='changed');
+    assert.equal(await page.locator('#fPass').inputValue(),'latest-password');
+    await page.evaluate(()=>{const f=window.backupFixture;f.clipboardText='';f.clipboardSequence++;});
+    await page.locator('#recognizeLogin').click();
+    await page.waitForFunction(()=>document.querySelector('#recognizeLogin').disabled);
+    assert.equal(await page.locator('#fPass').inputValue(),'latest-password','A stale recognized clipboard cannot overwrite the draft');
+    await fixtureClipboard('player---old');
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdClipboard=true;f.clipboardSequence++;refreshLoginClipboard();});
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseClipboard==='function');
+    await page.locator('#recognizeLogin').click();
+    await page.evaluate(()=>{
+      const f=window.backupFixture;f.clipboardText='new_player---new-password';f.clipboardSequence++;f.holdClipboard=false;f.releaseClipboard();
+    });
+    await page.waitForFunction(()=>document.querySelector('#fUser').value==='new_player');
+    assert.equal(await page.locator('#fPass').inputValue(),'new-password','An older in-flight read cannot win over click-time clipboard data');
+    await fixtureClipboard('player---password',true);
+    assert.equal(await page.locator('#recognizeLogin').isDisabled(),true);
+    await fixtureClipboard('player---password');
+    assert.equal(await page.locator('#recognizeLogin').isEnabled(),true);
+    await page.screenshot({path:path.resolve(__dirname,'../target/login-recognition-ui.png')});
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.some(c=>['login_new','switch_account','backup_sync','backup_save_password'].includes(c.command))),false);
+    await fixtureClipboard(null);
+    await page.locator('#fUser').fill('');await page.locator('#fPass').fill('');
+    console.log('PASS clipboard formats, button order/state, plaintext fill-only behavior and stale-read protection');
     await page.locator('#openBackup').click();
     await page.locator('#backupQueueTab').click();
     const card = account => page.locator(`.backup-account[data-account="${account}"]`);

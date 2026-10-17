@@ -1,6 +1,6 @@
 [package]
 name = "gameready"
-version = "0.1.13"
+version = "0.1.14"
 description = "GameReady - 一键就绪 · 开局即战"
 edition = "2021"
 
@@ -30,6 +30,8 @@ windows = { version = "0.58", features = [
   "Win32_System_Threading",
   "Win32_System_LibraryLoader",
   "Win32_System_Registry",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Foundation",
