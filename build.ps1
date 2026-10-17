@@ -44,6 +44,20 @@ try {
             }
         }
     }
+    # 每次打包后先关闭 GameReady，再更新项目与桌面的程序；Data 保留在原位置。
+    $desktopDir = [Environment]::GetFolderPath('DesktopDirectory', [Environment+SpecialFolderOption]::DoNotVerify)
+    if (-not $desktopDir) {
+        $desktopDir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name Desktop -ErrorAction Stop).Desktop
+        $desktopDir = [Environment]::ExpandEnvironmentVariables($desktopDir)
+    }
+    if (-not $desktopDir -or -not (Test-Path -LiteralPath $desktopDir -PathType Container)) {
+        throw 'Cannot locate the desktop folder'
+    }
+    $desktopExe = Join-Path $desktopDir 'GameReady.exe'
+    foreach ($running in @(Get-Process -Name gameready -ErrorAction SilentlyContinue)) {
+        $running.Kill()
+        if (-not $running.WaitForExit(10000)) { throw 'GameReady did not exit; executable replacement stopped' }
+    }
     Copy-Item -LiteralPath $builtExe -Destination (Join-Path $projectRoot 'gameready.exe') -Force
     $exeAsset = Join-Path $releaseDir "$assetBase.exe"
     Copy-Item -LiteralPath $builtExe -Destination $exeAsset -Force
@@ -73,6 +87,11 @@ try {
             }
         } finally { $stream.Dispose(); $sha256.Dispose() }
     }
+    Copy-Item -LiteralPath $builtExe -Destination $desktopExe -Force
+    if ((Get-FileHash -LiteralPath $desktopExe).Hash -ne (Get-FileHash -LiteralPath $builtExe).Hash) {
+        throw 'Desktop executable verification failed'
+    }
+    Write-Output 'Desktop GameReady.exe updated and verified'
     if ($Clean) {
         cargo clean
         if ($LASTEXITCODE -ne 0) { throw 'Build cache cleanup failed' }

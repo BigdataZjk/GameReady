@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -163,6 +163,28 @@ pub fn render_users(accounts: &[Account]) -> String {
     let mut output = String::new();
     render(&[("users".into(), Value::Object(users))], 0, &mut output);
     output
+}
+
+/// 登录历史可能延迟写入；全局 Accounts 表按 SteamID 绑定实际账号名。
+pub fn account_for_id(text: &str, sid64: &str) -> Result<Option<String>, String> {
+    let tree = parse(text)?;
+    let mut entries = tree.as_slice();
+    for key in ["InstallConfigStore", "Software", "Valve", "Steam", "Accounts"] {
+        let found: Vec<_> = entries.iter().filter(|(k, _)| k.eq_ignore_ascii_case(key)).collect();
+        match found.as_slice() {
+            [] => return Ok(None),
+            [(_, Value::Object(children))] => entries = children,
+            _ => return Err("Steam 账号映射格式无效，原文件已保留".into()),
+        }
+    }
+    let matches: Vec<_> = entries.iter().filter(|(_, value)| matches!(value, Value::Object(fields)
+        if fields.iter().any(|(key, value)| key.eq_ignore_ascii_case("SteamID") && matches!(value, Value::Text(id) if id == sid64))))
+        .map(|(name, _)| name).collect();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [name] if !name.is_empty() && !name.chars().any(char::is_control) => Ok(Some((*name).clone())),
+        _ => Err("Steam 账号映射不唯一，请检查配置后重试".into()),
+    }
 }
 
 #[cfg(test)]
@@ -844,11 +866,16 @@ fn cover_locked(include_global: bool, app: AppHandle, generation: u64) -> Result
     let root = steam_root_or_err()?;
     let sid3 = active_steam_sid3(&root).ok_or("未检测到已登录的 Steam 账号，请先完成登录")?;
     let sid64 = sid3_to_id64(&sid3).ok_or("当前 Steam 账号无效")?;
-    let account = read_vdf(&root)?.iter().find(|a| a.sid64 == sid64).map(to_account)
+    let account = session_account(&root, &sid64, &login_history(&root)?)?
         .ok_or("当前 Steam 账号记录不可用，请完成登录后重试")?;
     steam_progress(&app, generation, "stopping", "正在退出 Steam，等待保存配置", Some(&sid64));
     kill_and_wait()?;
-    set_remember_password(&root, &sid64, "1");
+    if let Err(error) = retain_session_account(&root, &account) {
+        let recovery = registry_set_autologin_user(&account.account_name)
+            .and_then(|()| relaunch_with_cred(&root, &account.account_name));
+        return Err(match recovery { Ok(()) => format!("{error}；已重新启动 Steam"),
+            Err(recovery) => format!("{error}；恢复 Steam 也失败：{recovery}") });
+    }
     steam_progress(&app, generation, "applying", "正在应用 Steam 配置", Some(&sid64));
     let mut report = apply_steam_presets(&root, &sid3, include_global);
     steam_progress(&app, generation, "starting", "配置已写入，正在启动 Steam", Some(&sid64));
@@ -1047,6 +1074,65 @@ fn active_steam_sid3(root: &str) -> Option<String> {
     Some(sid3.to_string())
 }
 
+fn connection_log(root: &str) -> PathBuf { Path::new(root).join("logs").join("connection_log.txt") }
+
+fn login_success_in_log(text: &str, sid3: &str, since: i64) -> Option<i64> {
+    use chrono::TimeZone;
+    let marker = format!("RecvMsgClientLogOnResponse() : [U:1:{sid3}] 'OK'");
+    text.lines().rev().find_map(|line| {
+        if !line.contains(&marker) { return None; }
+        let timestamp = chrono::NaiveDateTime::parse_from_str(line.get(1..20)?, "%Y-%m-%d %H:%M:%S").ok()?;
+        let timestamp = chrono::Local.from_local_datetime(&timestamp).single()?.timestamp();
+        (timestamp >= since).then_some(timestamp)
+    })
+}
+
+fn read_login_success(root: &str, sid3: &str, offset: u64, since: i64) -> Option<i64> {
+    let mut file = File::open(connection_log(root)).ok()?;
+    let len = file.metadata().ok()?.len();
+    // 只读取本次启动后的新增内容；日志轮换后要求时间晚于启动。
+    let rotated = len < offset;
+    file.seek(SeekFrom::Start(if rotated { 0 } else { offset }.max(len.saturating_sub(128 * 1024)))).ok()?;
+    let mut text = String::new();
+    file.take(128 * 1024).read_to_string(&mut text).ok()?;
+    login_success_in_log(&text, sid3, since + i64::from(rotated))
+}
+
+fn session_account(root: &str, sid64: &str, history: &[RawAccount]) -> Result<Option<SteamAccount>, String> {
+    let matches: Vec<_> = history.iter().filter(|a| a.sid64 == sid64).collect();
+    if matches.len() > 1 { return Err("Steam 账号记录重复，请检查 loginusers.vdf 后重试".into()); }
+    if let Some(account) = matches.first() { return Ok(Some(to_account(account))); }
+    let text = fs::read_to_string(Path::new(root).join("config").join("config.vdf"))
+        .map_err(|e| format!("读取 Steam 活动账号映射失败：{e}"))?;
+    let Some(name) = vdf::account_for_id(&text, sid64)? else { return Ok(None); };
+    Ok(Some(SteamAccount { steam_id64: sid64.into(), account_name: name, persona_name: String::new(),
+        auto_login: false, timestamp: sid64_to_sid3(sid64).and_then(|sid| read_login_success(root, &sid, 0, 0)).unwrap_or(0) }))
+}
+
+fn accounts_for_root(root: &str) -> Result<Vec<SteamAccount>, String> {
+    let history = login_history(root)?;
+    let mut accounts: Vec<_> = history.iter().map(to_account).collect();
+    if let Some(sid64) = active_steam_sid3(root).and_then(|sid| sid3_to_id64(&sid)) {
+        if !accounts.iter().any(|a| a.steam_id64 == sid64) {
+            if let Some(account) = session_account(root, &sid64, &history)? { accounts.push(account); }
+        }
+    }
+    Ok(accounts)
+}
+
+/// 仅在已确认会话且 Steam 完全退出后补齐缺失历史，保留其他账号与未知字段。
+fn retain_session_account(root: &str, account: &SteamAccount) -> Result<Vec<RawAccount>, String> {
+    let mut history = login_history(root)?;
+    if !history.iter().any(|a| a.sid64 == account.steam_id64) {
+        history.push(RawAccount { sid64: account.steam_id64.clone(), fields: vec![
+            ("AccountName".into(), account.account_name.clone()), ("PersonaName".into(), account.persona_name.clone()),
+            ("Timestamp".into(), account.timestamp.to_string()),
+        ] });
+    }
+    select_login_account(root, &mut history, &account.steam_id64)?;
+    Ok(history)
+}
+
 /// 写注册表 HKCU\Software\Valve\Steam 的 AutoLoginUser = account（REG_SZ）
 fn registry_set_autologin_user(account: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -1065,16 +1151,6 @@ fn field<'a>(a: &'a RawAccount, name: &str) -> Option<&'a str> {
         .iter()
         .find(|(k, _)| k == name)
         .map(|(_, v)| v.as_str())
-}
-
-/// 设置账号块的 RememberPassword 字段（无则追加）。写回整份 vdf。
-/// 背景：-login 登录不保存 Steam 端免密凭据（详见下方凭据存储区），置 1 仅保登录页
-/// UI 勾选态正确。⚠ 只能在 Steam 已完全退出后调用（运行中写会被退出回写覆盖）。
-fn set_remember_password(root: &str, sid64: &str, val: &str) {
-    let Ok(mut accounts) = read_vdf(root) else { return };
-    let Some(a) = accounts.iter_mut().find(|a| a.sid64 == sid64) else { return };
-    a.set("RememberPassword", val);
-    let _ = write_vdf(root, &accounts);
 }
 
 /// 原始账号块 → 对外 SteamAccount
@@ -1272,10 +1348,7 @@ pub fn accounts_list_v() -> Vec<SteamAccount> {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
-    match read_vdf(&root) {
-        Ok(accounts) => accounts.iter().map(to_account).collect(),
-        Err(_) => Vec::new(),
-    }
+    accounts_for_root(&root).unwrap_or_default()
 }
 
 /// AutoLoginUser 只是预选项；活动账号必须属于该安装目录的真实 Steam 进程。
@@ -1306,6 +1379,8 @@ struct LoginAttempt {
     sid64: Option<String>,
     baseline: i64,
     history: Vec<(String, i64)>,
+    log_offset: u64,
+    log_since: i64,
     include_global: bool,
     cover: Option<CoverReport>,
     restoring: bool,
@@ -1348,7 +1423,9 @@ impl LoginAttempt {
             self.password.as_deref(), saved.as_deref())
             && load_settings().steam_root.as_deref() == Some(self.root.as_str())
     }
-    fn launch(&self) -> Result<(), String> {
+    fn launch(&mut self) -> Result<(), String> {
+        self.log_offset = fs::metadata(connection_log(&self.root)).map(|m| m.len()).unwrap_or(0);
+        self.log_since = chrono::Utc::now().timestamp();
         registry_set_autologin_user(&self.account)?;
         match self.password.as_deref() {
             Some(password) => launch_steam(&self.root, &["-login", &self.account, password]),
@@ -1367,8 +1444,21 @@ impl LoginAttempt {
     fn confirmed(&self) -> Result<Option<SteamAccount>, String> {
         let Some(sid3) = active_steam_sid3(&self.root) else { return Ok(None); };
         let sid64 = sid3_to_id64(&sid3);
-        let Ok(records) = read_vdf(&self.root) else { return Ok(None); };
-        self.observed(&records.iter().map(to_account).collect::<Vec<_>>(), sid64.as_deref())
+        let Ok(records) = login_history(&self.root) else { return Ok(None); };
+        if let Some(account) = self.observed(&records.iter().map(to_account).collect::<Vec<_>>(), sid64.as_deref())? {
+            return Ok(Some(account));
+        }
+        // 首次 -login 会话可能尚无历史记录，以本次服务器 OK 和真实 SteamID 映射确认。
+        let Some(sid64) = sid64 else { return Ok(None); };
+        let Ok(Some(account)) = session_account(&self.root, &sid64, &records) else { return Ok(None); };
+        if active_steam_sid3(&self.root).as_deref() != Some(&sid3) { return Ok(None); }
+        Ok(self.observed_connection(account, read_login_success(&self.root, &sid3, self.log_offset, self.log_since)))
+    }
+    fn observed_connection(&self, mut account: SteamAccount, timestamp: Option<i64>) -> Option<SteamAccount> {
+        if !account.account_name.eq_ignore_ascii_case(&self.account)
+            || self.sid64.as_ref().is_some_and(|target| target != &account.steam_id64) { return None; }
+        account.timestamp = timestamp?;
+        Some(account)
     }
     fn pending(&self) -> LoginResult {
         let message = if self.restoring { "配置已写入，正在等待 Steam 恢复登录；如有验证提示，请在 Steam 完成" }
@@ -1401,7 +1491,8 @@ fn start_login(sid64: Option<String>, account: String, password: Option<String>,
             },
         };
         let mut attempt = LoginAttempt { generation, root, account, password,
-            sid64: known.map(|a| a.steam_id64), baseline: 0, history: Vec::new(), include_global: load_settings().global_cover_on,
+            sid64: known.map(|a| a.steam_id64), baseline: 0, history: Vec::new(), log_offset: 0, log_since: 0,
+            include_global: load_settings().global_cover_on,
             cover: None, restoring: false, started: Instant::now() };
         let previous = active_steam_sid3(&attempt.root).and_then(|sid| sid3_to_id64(&sid))
             .and_then(|sid| history.iter().find(|a| a.sid64 == sid).map(to_account));
@@ -1484,11 +1575,10 @@ fn watch_login(mut attempt: LoginAttempt, app: AppHandle) -> Result<(), String> 
                             steam_progress(&app, attempt.generation, "stopping", "首次账号已登录，正在退出 Steam 以应用账号配置", attempt.sid64.as_deref());
                             kill_and_wait()?;
                             let prepared = (|| -> Result<(), String> {
-                                let history = read_vdf(&attempt.root)?;
+                                let history = retain_session_account(&attempt.root, &account)?;
                                 attempt.history = history.iter().map(to_account).map(|a| (a.steam_id64, a.timestamp)).collect();
                                 attempt.baseline = history.iter().find(|a| a.sid64 == account.steam_id64)
                                     .map(to_account).ok_or("Steam 账号记录不可用")?.timestamp;
-                                set_remember_password(&attempt.root, &account.steam_id64, "1");
                                 steam_progress(&app, attempt.generation, "applying", "正在应用首次账号配置", attempt.sid64.as_deref());
                                 attempt.cover = Some(apply_steam_presets(&attempt.root, &sid3, attempt.include_global));
                                 Ok(())
@@ -2255,7 +2345,95 @@ mod regression_tests {
         LoginAttempt { generation: 7, root: "fixture-steam".into(), account: "player".into(),
             password: Some("fixture-password".into()), sid64: Some("76561197960265729".into()),
             baseline: 100, history: vec![("76561197960265729".into(), 100), ("76561197960265730".into(), 80)],
-            include_global: true, cover: None, restoring: false, started: Instant::now() }
+              log_offset: 0, log_since: 0, include_global: true, cover: None, restoring: false, started: Instant::now() }
+    }
+
+    #[test]
+    fn new_session_without_login_history_can_be_confirmed_retained_and_configured() {
+        use chrono::TimeZone;
+        let dir = std::env::temp_dir().join(format!("gameready-session-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("config")).unwrap();
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        let root = dir.to_str().unwrap();
+        let config = r#""InstallConfigStore" { "Software" { "Valve" { "Steam" { "Accounts" {
+            "player" { "SteamID" "76561197960265729" }
+            "other" { "SteamID" "76561197960265730" }
+        } } } } }"#;
+        fs::write(dir.join("config/config.vdf"), config).unwrap();
+        let mut old = login_record("76561197960265730", "other", 80);
+        old.set("Unrelated", "keep");
+        write_vdf(root, &[old]).unwrap();
+        let history = login_history(root).unwrap();
+        let account = session_account(root, "76561197960265729", &history).unwrap().unwrap();
+        assert_eq!(account.account_name, "player");
+        assert!(session_account(root, "76561197960265731", &history).unwrap().is_none());
+        let mut attempt = login_attempt_fixture();
+        attempt.root = root.into(); attempt.sid64 = None;
+        attempt.log_since = chrono::Local.with_ymd_and_hms(2026, 10, 17, 18, 45, 0).single().unwrap().timestamp();
+        let old_line = "[2026-10-17 18:44:59] [Logging On, 4, 7] [U:1:1] RecvMsgClientLogOnResponse() : [U:1:1] 'OK'\n";
+        fs::write(connection_log(root), old_line).unwrap();
+        attempt.log_offset = old_line.len() as u64;
+        assert!(attempt.observed_connection(account.clone(), read_login_success(root, "1", attempt.log_offset, attempt.log_since)).is_none());
+        let lines = "[2026-10-17 18:45:01] [Logging On, 4, 7] [U:1:2] RecvMsgClientLogOnResponse() : [U:1:2] 'OK'\n\
+            [2026-10-17 18:45:01] [Logging On, 4, 7] [U:1:1] RecvMsgClientLogOnResponse() : [U:1:1] 'InvalidPassword'\n";
+        OpenOptions::new().append(true).open(connection_log(root)).unwrap().write_all(lines.as_bytes()).unwrap();
+        assert!(read_login_success(root, "1", attempt.log_offset, attempt.log_since).is_none());
+        let success = "[2026-10-17 18:45:02] [Logging On, 4, 7] [U:1:1] RecvMsgClientLogOnResponse() : [U:1:1] 'OK'\n";
+        OpenOptions::new().append(true).open(connection_log(root)).unwrap().write_all(success.as_bytes()).unwrap();
+        let timestamp = read_login_success(root, "1", attempt.log_offset, attempt.log_since);
+        assert!(attempt.observed_connection(session_account(root, "76561197960265730", &history).unwrap().unwrap(), timestamp).is_none());
+        let confirmed = attempt.observed_connection(account, timestamp).unwrap();
+        let retained = retain_session_account(root, &confirmed).unwrap();
+        assert_eq!(retained.len(), 2);
+        assert_eq!(field(&retained[0], "Unrelated"), Some("keep"));
+        assert_eq!(field(&retained[1], "RememberPassword"), Some("1"));
+        assert_eq!(retain_session_account(root, &confirmed).unwrap().len(), 2);
+        let results = write_all(&dir, PackScope::SteamAccount, Some("1"));
+        assert_eq!(results.len(), 2); assert!(results.iter().all(|r| r.ok));
+        let local = fs::read_to_string(dir.join("userdata/1/config/localconfig.vdf")).unwrap();
+        assert!(local.contains("\"NotifyAvailableGames\"\t\t\"0\""));
+        let roaming = fs::read_to_string(dir.join("userdata/1/7/remote/sharedconfig.vdf")).unwrap();
+        assert!(roaming.contains("\"SteamDefaultDialog\"\t\t\"#app_games\""));
+        // 恢复阶段必须读取重新启动之后的新成功，旧阶段的 OK 不能复用。
+        attempt.log_offset = fs::metadata(connection_log(root)).unwrap().len();
+        attempt.sid64 = Some(confirmed.steam_id64.clone());
+        assert!(read_login_success(root, "1", attempt.log_offset, attempt.log_since).is_none());
+        fs::write(connection_log(root), old_line).unwrap();
+        assert!(read_login_success(root, "1", attempt.log_offset, attempt.log_since).is_none());
+        fs::write(connection_log(root), success).unwrap();
+        assert!(read_login_success(root, "1", attempt.log_offset, attempt.log_since).is_some());
+        fs::write(vdf_path(root), b"{broken").unwrap();
+        assert!(retain_session_account(root, &confirmed).is_err());
+        assert_eq!(fs::read(vdf_path(root)).unwrap(), b"{broken");
+        let resolved = fs::canonicalize(&dir).unwrap();
+        assert!(resolved.starts_with(fs::canonicalize(std::env::temp_dir()).unwrap()));
+        fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
+    fn session_mapping_rejects_duplicate_ids_and_malformed_configs() {
+        let duplicate = r#""InstallConfigStore" { "Software" { "Valve" { "Steam" { "Accounts" {
+            "player" { "SteamID" "76561197960265729" } "other" { "SteamID" "76561197960265729" }
+        } } } } }"#;
+        assert!(vdf::account_for_id(duplicate, "76561197960265729").is_err());
+        assert!(vdf::account_for_id("{broken", "76561197960265729").is_err());
+        assert!(vdf::account_for_id("\"InstallConfigStore\" {}", "76561197960265729").unwrap().is_none());
+    }
+
+    #[test]
+    #[ignore = "只读核验真实 Steam 会话，需要 GAMEREADY_STEAM_TEST_ROOT"]
+    fn live_steam_session_read_only_diagnostic() {
+        let root = std::env::var("GAMEREADY_STEAM_TEST_ROOT").unwrap();
+        let sid3 = active_steam_sid3(&root).expect("Steam 活动进程不可用");
+        let sid64 = sid3_to_id64(&sid3).unwrap();
+        let history = login_history(&root).unwrap();
+        let account = session_account(&root, &sid64, &history).unwrap().expect("SteamID 账号映射不可用");
+        assert!(!account.account_name.is_empty());
+        assert!(read_login_success(&root, &sid3, 0, 0).is_some());
+        let accounts = accounts_for_root(&root).unwrap();
+        assert_eq!(accounts.iter().filter(|a| a.steam_id64 == sid64).count(), 1);
+        println!("Live Steam identified; history contains active account: {}; displayed accounts: {}",
+            history.iter().any(|a| a.sid64 == sid64), accounts.len());
     }
 
     #[test]
@@ -2828,7 +3006,7 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
 /// 账号列表（前端账号模态渲染）
 #[tauri::command]
 pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
-    Ok(accounts_list_v())
+    match steam_root_or_err() { Ok(root) => accounts_for_root(&root), Err(_) => Ok(Vec::new()) }
 }
 
 /// 登录准备在后台线程执行；验证码和服务器等待由可取消的确认线程处理。
