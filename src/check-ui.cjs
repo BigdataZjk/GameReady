@@ -474,8 +474,18 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await assertLoginFeedback('Steam 路径已更新，上次登录确认已取消',null);
     console.log('PASS path-change cancellation replaces waiting feedback and empty idle stays silent');
 
+    await page.evaluate(() => {
+      const f=window.backupFixture;
+      f.accounts.push({ steam_id64:'76561198000000002',account_name:'fresh_player',persona_name:'Fresh Player',timestamp:1728000001 });
+      f.status={...f.status,steam_running:true,current_steam_id64:'76561198000000002'};
+      applyStatus({...f.status,steam_operation:f.operation});
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('#acctCards .acct')].some(card=>card.textContent.includes('fresh_player')));
+    assert.match(await page.locator('#acctCards .acct.cur').textContent(),/fresh_player/);
+    console.log('PASS active SteamID change refreshes new account without waiting for a history event');
     await page.evaluate(async () => {
-      const f=window.backupFixture;f.status={...f.status,steam_running:true,current_steam_id64:f.accounts[0].steam_id64};
+      const f=window.backupFixture;f.accounts=f.accounts.filter(a=>a.account_name!=='fresh_player');
+      f.status={...f.status,steam_running:true,current_steam_id64:f.accounts[0].steam_id64};
       await refreshStatus();
     });
     await page.locator('#coverBtn').click();
