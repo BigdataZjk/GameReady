@@ -54,6 +54,12 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             if(window.backupFixture.passwordMissing) throw {message:'本机未保存该账号的可用密码，请先补充密码'};
             return ' visible ---- password ';
           }
+          if(command === 'delete_account') {
+            await new Promise(resolve=>setTimeout(resolve,40));
+            const f=window.backupFixture;
+            f.accounts=f.accounts.filter(account=>account.steam_id64!==args.sid64);
+            return 'fixture_delete';
+          }
           if(command === 'list_logs') return [];
           if(command === 'switch_account' || command === 'login_new') {
             const f = window.backupFixture, generation = ++f.generation;
@@ -555,6 +561,20 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.waitForFunction(() => document.querySelector('#coverBadge').textContent === '完成');
     assert.equal(await page.locator('#coverBtn').evaluate(el=>el.style.getPropertyValue('--p')),'100');
     console.log('PASS cover shows real completion rather than reaching 100% on a timer');
+    await page.evaluate(async()=>{
+      const f=window.backupFixture;
+      f.accounts.push({steam_id64:'76561198000000009',account_name:'fixture_delete',persona_name:'Delete Fixture',timestamp:1728000000});
+      await refreshAccounts();
+    });
+    const deletedCard=page.locator('#acctCards .acct[data-sid="76561198000000009"]');
+    await deletedCard.getByRole('button',{name:'删除',exact:true}).click();
+    await page.waitForFunction(()=>window.backupFixture.calls.some(c=>c.command==='delete_account'));
+    assert.equal(await page.locator('.modal-mask.show').count(),0,'Delete must execute without a confirmation dialog');
+    await page.waitForFunction(()=>!document.querySelector('#acctCards .acct[data-sid="76561198000000009"]'));
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='delete_account').map(c=>c.args)),
+      [{sid64:'76561198000000009'}]);
+    assert.match(await page.locator('#tkTxt').textContent(),/已删除 fixture_delete/);
+    console.log('PASS account deletion executes once directly and refreshes the list without confirmation');
     assert.deepEqual(errors, []);
     console.log('PASS no JavaScript runtime errors (480 x 660 viewport)');
   } finally {
