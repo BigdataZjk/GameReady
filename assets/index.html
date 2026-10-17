@@ -433,6 +433,9 @@ body.preview.backup-review .window{ flex-shrink:0; }
 .env-row .st.acc{ color:var(--acc); }
 .env-row .st.acc .dot{ background:var(--acc); box-shadow:0 0 6px var(--acc); }
 .copy{ font-size:10.5px; color:var(--txt3); text-align:center; margin-top:12px; letter-spacing:.06em; }
+.account-menu{ position:fixed; z-index:1000; min-width:138px; padding:5px; border:1px solid var(--line); border-radius:9px; background:var(--panel2); box-shadow:0 8px 24px #0008; }
+.account-menu button{ display:block; width:100%; padding:8px 12px; border:0; border-radius:5px; background:transparent; color:var(--txt); font:inherit; font-size:12px; text-align:left; cursor:pointer; }
+.account-menu button:hover,.account-menu button:focus-visible{ background:rgba(var(--acc-rgb),.12); color:var(--acc); outline:none; }
 /* ---- 路径修改模态（原 setup 独立页取消，R11） ---- */
 .f-note{ font-size:10.5px; color:var(--txt3); margin-top:10px; line-height:1.6; }
 .f-note .okc{ color:var(--ok); }
@@ -469,7 +472,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.11</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.12</span>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -624,7 +627,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.11</div>
+          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.12</div>
           <br>
           <button class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
@@ -732,6 +735,10 @@ body.preview.backup-review .window{ flex-shrink:0; }
   </div>
   <!-- 底部播报栏（单行不换行，超宽从右向左滚动；替代原右下角浮动 toast） -->
   <div class="ticker" id="ticker"><span class="tk-dot"></span><div class="tk-clip"><span class="tk-txt" id="tkTxt">GameReady 就绪</span></div></div>
+</div>
+<div class="account-menu" id="accountMenu" role="menu" aria-label="账号操作" hidden>
+  <button type="button" role="menuitem" data-copy="account">复制账号</button>
+  <button type="button" role="menuitem" data-copy="password">复制密码</button>
 </div>
 <script>
 /* ================= GameReady 前端逻辑（接入 Tauri 2 真实后端） =================
@@ -1179,6 +1186,7 @@ async function refreshAccounts(){
   acctBusy = true;
   try{
     const list = await invoke('accounts_list');
+    closeAccountMenu();
     state.accounts = Array.isArray(list) ? list : [];
     renderAccountsPage();
   }catch(e){
@@ -1194,6 +1202,7 @@ function accountCard(a, cur){
   const target = steamOperation?.sid64 === String(a.steam_id64), busy = steamBusy();
   const card = el('div', 'acct'+(isCur?' cur':''));
   card.dataset.sid = String(a.steam_id64);
+  card.tabIndex = 0;
   const av = el('div', 'avatar', firstChar(a.persona_name));
   if(isCur) av.appendChild(el('span','live'));
   const info = el('div','acct-info');
@@ -1223,13 +1232,66 @@ function renderAccountsPage(){
   $('doLogin').innerHTML = loginBusy ? '<span class="spin-sm"></span> 登录中…' : '登 录';
   const box = $('acctCards');
   box.textContent = '';
-  const arr = Array.isArray(state.accounts) ? state.accounts : [];
+  const arr = Array.isArray(state.accounts) ? [...state.accounts].sort((a,b)=>
+    (acctTsToDate(b.timestamp)?.getTime() || 0)-(acctTsToDate(a.timestamp)?.getTime() || 0)) : [];
   $('acctCnt').textContent = arr.length ? (arr.length + ' 个本地账号') : '';
   const cur = computeCurrentAccount();
   const frag = document.createDocumentFragment();
   for(const a of arr) frag.appendChild(accountCard(a, cur));
   box.appendChild(frag);
 }
+let accountMenuTarget = null;
+function closeAccountMenu(restoreFocus=false){
+  $('accountMenu').hidden=true;
+  if(restoreFocus && accountMenuTarget){
+    const card=[...$('acctCards').children].find(row=>row.dataset.sid===String(accountMenuTarget.steam_id64));
+    card?.focus();
+  }
+  accountMenuTarget=null;
+}
+document.addEventListener('contextmenu',e=>{
+  e.preventDefault();
+  closeAccountMenu();
+  const card=e.target.closest('#acctCards .acct');
+  if(!card) return;
+  const account=state.accounts?.find(a=>String(a.steam_id64)===card.dataset.sid);
+  if(!account) return;
+  accountMenuTarget=account;
+  const menu=$('accountMenu'), rect=card.getBoundingClientRect();
+  menu.hidden=false;
+  menu.style.left=Math.max(6,Math.min(e.clientX || rect.left+24,innerWidth-menu.offsetWidth-6))+'px';
+  menu.style.top=Math.max(6,Math.min(e.clientY || rect.top+12,innerHeight-menu.offsetHeight-6))+'px';
+  menu.querySelector('button').focus();
+});
+document.addEventListener('pointerdown',e=>{if(!e.target.closest('#accountMenu')) closeAccountMenu();});
+document.addEventListener('scroll',()=>closeAccountMenu(),true);
+window.addEventListener('resize',()=>closeAccountMenu());
+window.addEventListener('blur',()=>closeAccountMenu());
+$('accountMenu').addEventListener('keydown',e=>{
+  if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeAccountMenu(true);}
+  if(['ArrowUp','ArrowDown'].includes(e.key)){
+    e.preventDefault();
+    const buttons=[...$('accountMenu').querySelectorAll('button')];
+    buttons[(buttons.indexOf(document.activeElement)+1)%buttons.length].focus();
+  }
+});
+$('accountMenu').addEventListener('click',async e=>{
+  const button=e.target.closest('[data-copy]'), account=accountMenuTarget;
+  if(!button || !account) return;
+  const password=button.dataset.copy==='password';
+  closeAccountMenu();
+  try{
+    const value=password?await invoke('account_password',{sid64:String(account.steam_id64)}):account.account_name;
+    try{ await navigator.clipboard.writeText(value); }
+    catch(_){
+      const input=el('textarea'); input.value=value; input.style.cssText='position:fixed;left:-9999px';
+      document.body.appendChild(input); input.select();
+      try{if(!document.execCommand('copy')) throw new Error('剪贴板写入失败，请重试');}
+      finally{input.remove();}
+    }
+    toast(password?'密码已复制':'账号已复制','ok');
+  }catch(error){toast(errText(error),'err');}
+});
 async function doSwitch(a){
   if(steamBusy()) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
@@ -1864,11 +1926,11 @@ $('btnClose').addEventListener('click', async ()=>{
 /* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
 $('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
 (async ()=>{
-  let v = '0.1.11';
+  let v = '0.1.12';
   try{
     if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
       v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.11 */ }
+  }catch(_){ /* 取不到则用写死的 0.1.12 */ }
   $('verTag').textContent = 'v'+v;
   $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
 })();

@@ -35,6 +35,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         generation: 0, operation: null, status: { paths_valid: {}, steam_running: false, lol_guard_on: false },
         holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
         failSync: false, failSave: false, emit, publish };
+      Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.backupFixture.copied=value}});
       window.__TAURI__ = {
         event: { listen: async (name, fn) => { (listeners[name] ||= []).push(fn); return () => {}; } },
         dialog: { open: async () => null },
@@ -49,6 +50,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
           }
           if(command === 'get_settings') return { accent: '#00e5ff', close_behavior: 'tray' };
           if(command === 'accounts_list') return clone(window.backupFixture.accounts);
+          if(command === 'account_password') {
+            if(window.backupFixture.passwordMissing) throw {message:'本机未保存该账号的可用密码，请先补充密码'};
+            return ' visible ---- password ';
+          }
           if(command === 'list_logs') return [];
           if(command === 'switch_account' || command === 'login_new') {
             const f = window.backupFixture, generation = ++f.generation;
@@ -292,6 +297,59 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       f.loginResult = { name: 'Saved Player', message: '已登录 Saved Player，配置覆盖完成', ok: true };
       f.emit('steam-accounts-changed', null);
     });
+    await page.evaluate(async () => {
+      const f=window.backupFixture, saved=f.accounts[0];
+      f.accounts=[{...saved,steam_id64:'76561198000000002',account_name:'middle',timestamp:1728000001},saved,
+        {...saved,steam_id64:'76561198000000003',account_name:'newest',timestamp:1728000002000},
+        {...saved,steam_id64:'76561198000000004',account_name:'unknown',timestamp:0}];
+      f.status={...f.status,steam_running:true,current_steam_id64:saved.steam_id64};
+      await refreshAccounts();await refreshStatus();
+    });
+    await page.waitForFunction(()=>!acctBusy);
+    assert.deepEqual(await page.locator('#acctCards .acct').evaluateAll(rows=>rows.map(row=>row.dataset.sid)),
+      ['76561198000000003','76561198000000002','76561198000000001','76561198000000004']);
+    assert.equal(await page.locator('#acctCards .acct').nth(2).evaluate(row=>row.classList.contains('cur')),true,
+      'An older current account must not be pinned above a more recent login');
+    for(const target of ['body','#fPass']) {
+      assert.equal(await page.locator(target).evaluate(node=>node.dispatchEvent(new MouseEvent('contextmenu',
+        {bubbles:true,cancelable:true,button:2}))),false);
+      assert.equal(await page.locator('#accountMenu').isHidden(),true);
+    }
+    const copiedCard=page.locator('#acctCards .acct[data-sid="76561198000000001"]');
+    await copiedCard.dispatchEvent('contextmenu',{clientX:475,clientY:650,button:2});
+    assert.equal(await page.locator('#accountMenu').isVisible(),true);
+    assert.deepEqual(await page.locator('#accountMenu button').allTextContents(),['复制账号','复制密码']);
+    assert.equal(await page.locator('#accountMenu').evaluate(menu=>{
+      const r=menu.getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
+    }),true);
+    await page.evaluate(()=>renderAccountsPage());
+    assert.equal(await page.locator('#accountMenu').isVisible(),true,'A status redraw must keep the menu open');
+    await page.screenshot({path:path.resolve(__dirname,'../target/account-context-menu-ui.png')});
+    await page.getByRole('menuitem',{name:'复制账号',exact:true}).click();
+    await page.waitForFunction(()=>window.backupFixture.copied==='saved_player');
+    assert.equal(await page.locator('#accountMenu').isHidden(),true);
+    await copiedCard.click({button:'right'});
+    await page.getByRole('menuitem',{name:'复制密码',exact:true}).click();
+    await page.waitForFunction(()=>window.backupFixture.copied===' visible ---- password ');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='account_password').at(-1).args),
+      {sid64:'76561198000000001'});
+    assert.equal(await page.locator('#tkTxt').textContent(),'密码已复制');
+    await page.evaluate(()=>window.backupFixture.passwordMissing=true);
+    await copiedCard.click({button:'right'});
+    await page.getByRole('menuitem',{name:'复制密码',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#tkTxt').textContent.includes('请先补充密码'));
+    assert.equal(await page.evaluate(()=>window.backupFixture.copied),' visible ---- password ');
+    await copiedCard.click({button:'right'});
+    await page.keyboard.press('ArrowDown');await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#accountMenu').isHidden(),true);
+    assert.equal(await copiedCard.evaluate(row=>document.activeElement===row),true);
+    await copiedCard.click({button:'right'});await page.locator('#fUser').click();
+    assert.equal(await page.locator('#accountMenu').isHidden(),true);
+    await page.evaluate(async()=>{
+      const f=window.backupFixture;f.passwordMissing=false;f.accounts=f.accounts.filter(a=>a.account_name==='saved_player');
+      f.status={...f.status,steam_running:false,current_steam_id64:null};await refreshAccounts();await refreshStatus();
+    });
+    console.log('PASS recent-login ordering, global native context-menu suppression, scoped copy menus and clipboard results');
     const savedLogin = page.locator('#acctCards .acct').getByRole('button', { name: '登录', exact: true });
     async function assertLoginFeedback(message, ok) {
       await page.waitForFunction(text => document.querySelector('#tkTxt').textContent === text, message);
