@@ -1119,6 +1119,9 @@ function steamBusy(){
   return switchBusy || loginBusy || delBusy || coverBusy ||
     !!(steamOperation && ['requesting','stopping','applying','starting','restoring'].includes(steamOperation.phase));
 }
+function accountLoginPending(sid64){
+  return steamOperation?.sid64 === String(sid64) && steamOperation.phase !== 'idle' && !delBusy && !coverBusy;
+}
 function acceptSteamGeneration(generation){
   if(!Number.isFinite(generation) || generation < Math.max(steamGeneration,steamRequestGeneration)) return false;
   steamGeneration = generation;
@@ -1175,7 +1178,7 @@ function loginFinished(result){
    历史登录过/AutoLogin 记录都不算——Steam 没开就没有"当前登录" */
 function computeCurrentAccount(){
   if(!(state.status && state.status.steam_running) || !state.currentSid64) return null;
-  if(steamOperation?.phase === 'waiting' && steamOperation.sid64 === state.currentSid64) return null;
+  if(accountLoginPending(state.currentSid64)) return null;
   const arr = Array.isArray(state.accounts) ? state.accounts : [];
   return arr.find(a=>a.steam_id64 && a.steam_id64===state.currentSid64) || null;
 }
@@ -1200,6 +1203,7 @@ async function refreshAccounts(){
 function accountCard(a, cur){
   const isCur = a === cur;
   const target = steamOperation?.sid64 === String(a.steam_id64), busy = steamBusy();
+  const loggingIn = accountLoginPending(a.steam_id64);
   const card = el('div', 'acct'+(isCur?' cur':''));
   card.dataset.sid = String(a.steam_id64);
   card.tabIndex = 0;
@@ -1216,8 +1220,10 @@ function accountCard(a, cur){
     op.classList.add('acct-actions');
     const go = el('button','op-btn go','登录'); go.type='button';
     const del = el('button','op-btn del','删除'); del.type='button';
-    go.disabled = del.disabled = busy;
-    if(target && busy) go.innerHTML = '<span class="spin-sm"></span> 处理中';
+    go.disabled = busy || loggingIn;
+    del.disabled = busy;
+    if(loggingIn) go.innerHTML = '<span class="spin-sm"></span> 登录中…';
+    else if(target && busy) go.innerHTML = '<span class="spin-sm"></span> 处理中';
     go.addEventListener('click', ()=>doSwitch(a));
     del.addEventListener('click', ()=>doDelete(a));
     op.appendChild(go); op.appendChild(del);
@@ -1295,7 +1301,7 @@ $('accountMenu').addEventListener('click',async e=>{
   }catch(error){toast(errText(error),'err');}
 });
 async function doSwitch(a){
-  if(steamBusy()) return;
+  if(steamBusy() || accountLoginPending(a.steam_id64)) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   switchBusy = true;
   beginSteamOperation('正在登录并应用配置 '+displayName(a)+'…',String(a.steam_id64));

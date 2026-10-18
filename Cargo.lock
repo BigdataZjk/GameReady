@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "gameready"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "chrono",
  "eframe",
@@ -2287,6 +2287,7 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "sysinfo",
  "tauri",

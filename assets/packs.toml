@@ -2007,7 +2007,6 @@ content = '''
 			"Steam"
 			{
 				"AutoUpdateWindowEnabled"		"0"
-				"SteamDefaultDialog"		"#app_games"
 				"Rate"		"30000"
 			}
 		}

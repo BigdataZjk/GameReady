@@ -36,7 +36,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
         failSync: false, failSave: false, clipboardText:null, clipboardSequence:0, emit, publish,
         logs:[], holdLogs:false, logResolvers:[], updateDownloads:0,
-        update:{current_version:'0.1.16',latest_version:null,available:false,status:'idle',message:'',downloaded_path:null} };
+        update:{current_version:'0.1.17',latest_version:null,available:false,status:'idle',message:'',downloaded_path:null} };
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{
         const f=window.backupFixture;f.copied=value;f.clipboardText=value;f.clipboardSequence++;
       }}});
@@ -527,7 +527,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await refreshStatus();
     });
     assert.equal(await page.locator('#acctCards .acct.cur').count(),0,'Waiting target is not a confirmed current account');
-    assert.equal(await savedLogin.isEnabled(),true,'A pending verification can be replaced by a new login');
+    const pendingLogin = savedRow.getByRole('button',{name:'登录中…',exact:true});
+    await savedRow.hover();
+    assert.equal(await pendingLogin.isDisabled(),true,'The same account stays disabled throughout verification');
+    const pendingCalls = await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='switch_account').length);
+    await page.evaluate(()=>{
+      document.querySelector('#acctCards .acct .go').click();
+      doSwitch(window.backupFixture.accounts[0]);
+    });
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='switch_account').length),pendingCalls,
+      'Neither clicks nor direct repeat calls can restart the pending account');
     for(const ok of [true, false]) {
       const message = ok ? '后台已确认登录，配置覆盖完成' : '后台已确认登录，但配置覆盖失败：模拟文件占用';
       await page.evaluate(({ message, ok }) => {
@@ -538,6 +547,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         f.emit('steam-login-finished', { name: 'Saved Player', message, ok, generation:f.generation,pending:false });
       }, { message, ok });
       await assertLoginFeedback(message, ok);
+      assert.equal(await savedLogin.isEnabled(),true,'Final success or failure restores the login action');
     }
     assert.equal(await page.evaluate(() => window.backupFixture.calls.some(c => c.command === 'steam_cover')), false,
       'Login configuration is applied once by the backend, never by a second frontend IPC');
@@ -603,6 +613,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       },phase);
       assert.equal(await page.locator('#doLogin').isDisabled(),true);
       assert.equal(await page.locator('#coverBtn').isDisabled(),true);
+      assert.equal(await savedRow.getByRole('button',{name:'登录中…',exact:true}).isDisabled(),true,
+        'The target account indicates login progress in every backend phase');
       assert.equal(await page.locator('#acctCards .acct button:enabled').count(),0);
       await page.evaluate(() => {doSwitch(window.backupFixture.accounts[0]);document.querySelector('#doLogin').click();document.querySelector('#coverBtn').click();});
       assert.equal(await page.evaluate(() => window.backupFixture.calls.length),count);

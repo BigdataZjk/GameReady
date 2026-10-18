@@ -125,6 +125,41 @@ pub fn merge(existing: &[u8], template: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output.into_bytes())
 }
 
+/// Match Steam's own locally modified Cloud record (syncstate=3), retaining the
+/// server revision and unrelated files. A bare file is invisible to Remote Storage.
+pub fn roaming_cache(existing: &[u8], content: &[u8], modified: u64, now: i64) -> Result<Vec<u8>, String> {
+    use sha1::{Digest, Sha1};
+    let tree = parse(std::str::from_utf8(existing).map_err(|_| "Steam 云缓存不是 UTF-8，原文件已保留")?)?;
+    let entries = if tree.is_empty() { &[][..] } else {
+        if tree.len() != 1 || tree[0].0 != "7" { return Err("Steam 云缓存根节点无效，原文件已保留".into()); }
+        match &tree[0].1 { Value::Object(entries) => entries, _ => return Err("Steam 云缓存格式无效，原文件已保留".into()) }
+    };
+    let records: Vec<_> = entries.iter().filter(|(key, _)| key.eq_ignore_ascii_case("sharedconfig.vdf")).collect();
+    if records.len() > 1 { return Err("Steam 云缓存存在重复账号配置记录，原文件已保留".into()); }
+    let fields = match records.first().map(|(_, value)| value) {
+        Some(Value::Object(fields)) => fields.as_slice(), None => &[],
+        _ => return Err("Steam 账号配置云缓存格式无效，原文件已保留".into()),
+    };
+    let field = |key: &str| fields.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case(key) { if let Value::Text(value) = value { return Some(value.as_str()); } }
+        None
+    });
+    let hash = format!("{:x}", Sha1::digest(content));
+    if field("root") == Some("0") && field("sha") == Some(hash.as_str()) && field("size") == Some(content.len().to_string().as_str())
+        && field("localtime") == Some(modified.to_string().as_str())
+        && matches!(field("syncstate"), Some("1" | "3")) && field("persiststate") == Some("0") {
+        return Ok(existing.to_vec());
+    }
+    let defaults = br#""7" { "ChangeNumber" "0" "OSType" "0" "sharedconfig.vdf" {
+        "root" "0" "remotetime" "0" "platformstosync2" "-1" } }"#;
+    let base = if existing.is_empty() { defaults.to_vec() } else { merge(defaults, existing)? };
+    let version_time = now.max(field("time").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).saturating_add(1))
+        .max(field("remotetime").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).saturating_add(1));
+    let patch = format!(r#""7" {{ "sharedconfig.vdf" {{ "root" "0" "size" "{}" "sha" "{hash}"
+        "localtime" "{modified}" "time" "{version_time}" "syncstate" "3" "persiststate" "0" }} }}"#, content.len());
+    merge(&base, patch.as_bytes())
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Account {
     pub sid64: String,
@@ -764,7 +799,7 @@ pub struct CoverResult {
     pub err: Option<String>,
 }
 
-/// 应用指定配置组；账号组需 SID3。写入成功但时间戳失败只记警告。
+/// 应用指定配置组；账号组需 SID3。Steam 保留真实修改时间，LOL 使用固定时间。
 pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<CoverResult> {
     let mut out = Vec::new();
     for f in FILES.iter().filter(|f| f.scope == scope) {
@@ -800,7 +835,7 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
                 },
             };
             match vdf::merge(&existing, f.bytes) {
-                Ok(bytes) if bytes == existing => { out.push(r); continue; },
+                Ok(bytes) if bytes == existing && !f.rel.ends_with(r"7\remote\sharedconfig.vdf") => { out.push(r); continue; },
                 Ok(bytes) => Cow::Owned(bytes),
                 Err(e) => { r.ok = false; r.err = Some(e); out.push(r); continue; },
             }
@@ -816,6 +851,11 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
             }
         }
 
+        if f.rel.ends_with(r"7\remote\sharedconfig.vdf") {
+            if let Err(e) = write_roaming_config(&target, &bytes) { r.ok = false; r.err = Some(e); }
+            out.push(r);
+            continue;
+        }
         // 原子写：先写 .tmp 再 rename 覆盖（守护每 200ms 一轮，避免游戏恰好读到半截文件）
         match atomic_write(&target, &bytes, false) {
             Err(e) => {
@@ -824,14 +864,34 @@ pub fn write_all(root: &Path, scope: PackScope, sid3: Option<&str>) -> Vec<Cover
             }
             Ok(()) => {
                 // 时间戳失败不判为覆盖失败：ok 保持 true，仅在 err 记 warning
-                if let Err(e) = set_stamp_2000(&target) {
-                    r.err = Some(format!("ts-failed: {e}"));
+                if scope == PackScope::Lol {
+                    if let Err(e) = set_stamp_2000(&target) { r.err = Some(format!("ts-failed: {e}")); }
                 }
             }
         }
         out.push(r);
     }
     out
+}
+
+fn write_roaming_config(target: &Path, content: &[u8]) -> Result<(), String> {
+    let cache = target.parent().and_then(Path::parent).ok_or("Steam 云缓存路径无效")?.join("remotecache.vdf");
+    let existing = match fs::read(&cache) {
+        Ok(bytes) => bytes, Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("读取 Steam 云缓存失败：{e}")),
+    };
+    let modified = |path: &Path| fs::metadata(path).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    // Validate before changing the configuration; a corrupt index must never be replaced.
+    vdf::roaming_cache(&existing, content, modified(target), chrono::Utc::now().timestamp())?;
+    if fs::read(target).ok().as_deref() != Some(content) {
+        atomic_write(target, content, false).map_err(|e| format!("Steam 漫游配置写入失败：{e}"))?;
+    }
+    let updated = vdf::roaming_cache(&existing, content, modified(target), chrono::Utc::now().timestamp())?;
+    if updated != existing {
+        atomic_write(&cache, &updated, false).map_err(|e| format!("更新 Steam 云缓存失败：{e}；账号配置尚未提交，请重试"))?;
+    }
+    Ok(())
 }
 
 /// 把目标文件的创建/修改/访问时间统一设为本地 2000-01-01 00:00:00。
@@ -1387,6 +1447,7 @@ fn kill_and_wait() -> Result<(), String> {
         let exe = Path::new(&root).join("steam.exe");
         let _ = Command::new(&exe)
             .arg("-shutdown")
+            .current_dir(&root)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
@@ -1407,6 +1468,7 @@ pub fn launch_steam(root: &str, args: &[&str]) -> Result<(), String> {
     let exe = Path::new(root).join("steam.exe");
     Command::new(&exe)
         .args(args)
+        .current_dir(root)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
@@ -2743,17 +2805,72 @@ mod regression_tests {
     }
 
     #[test]
-    fn global_and_account_templates_both_select_library_at_the_steam_preference_path() {
-        for pack in FILES.iter().filter(|p| p.scope == PackScope::SteamGlobal || p.rel.ends_with("sharedconfig.vdf")) {
-            let root = if pack.scope == PackScope::SteamGlobal { "InstallConfigStore" } else { "UserRoamingConfigStore" };
-            let original = format!("\"{root}\" {{ \"Software\" {{ \"Valve\" {{ \"Steam\" {{ \"SteamDefaultDialog\" \"#app_store\" \"OtherPreference\" \"keep\" }} }} }} }}");
-            let merged = vdf::merge(original.as_bytes(), pack.bytes).unwrap();
-            let text = std::str::from_utf8(&merged).unwrap();
-            assert!(text.starts_with(&format!("\"{root}\"\n")));
-            assert_eq!(text.matches("\"SteamDefaultDialog\"\t\t\"#app_games\"").count(), 1);
-            assert!(!text.contains("#app_store"));
-            assert!(text.contains("\"OtherPreference\"\t\t\"keep\""));
+    fn roaming_presets_register_missing_cache_preserve_other_files_and_are_idempotent() {
+        let dir = std::env::temp_dir().join(format!("gameready-roaming-test-{}", uuid::Uuid::new_v4()));
+        let remote = dir.join("userdata/1/7/remote/sharedconfig.vdf");
+        fs::create_dir_all(remote.parent().unwrap()).unwrap();
+        let cloud = br##""UserRoamingConfigStore" { "CloudOnly" "keep" "Software" { "Valve" { "Steam" { "SteamDefaultDialog" "#app_store" } } } }"##;
+        fs::write(&remote, cloud).unwrap();
+        let cache = dir.join("userdata/1/7/remotecache.vdf");
+        assert!(!cache.exists());
+        assert!(write_all(&dir, PackScope::SteamAccount, Some("1")).iter().all(|r| r.ok));
+        let first = fs::read(&cache).unwrap();
+        let first_text = std::str::from_utf8(&first).unwrap();
+        assert!(first_text.contains("\"syncstate\"\t\t\"3\""));
+        assert!(first_text.contains("\"remotetime\"\t\t\"0\""));
+        let metadata = br#""7" { "ChangeNumber" "42" "OSType" "0" "OtherCloudFile" { "sha" "untouched" }
+            "sharedconfig.vdf" { "remotetime" "1234" "platformstosync2" "4" } }"#;
+        fs::write(&cache, vdf::merge(&first, metadata).unwrap()).unwrap();
+        let before = fs::read(&cache).unwrap();
+        for _ in 0..2 {
+            assert!(write_all(&dir, PackScope::SteamAccount, Some("1")).iter().all(|r| r.ok));
+            let effective = fs::read_to_string(&remote).unwrap();
+            assert!(effective.contains("\"CloudOnly\"\t\t\"keep\""));
+            assert_eq!(effective.matches("\"SteamDefaultDialog\"\t\t\"#app_games\"").count(), 1);
+            assert!(!effective.contains("#app_store"));
+            assert_eq!(fs::read(&cache).unwrap(), before);
         }
+        let damaged = b"\"7\" { broken";
+        fs::write(&cache, damaged).unwrap();
+        fs::write(&remote, cloud).unwrap();
+        let results = write_all(&dir, PackScope::SteamAccount, Some("1"));
+        assert!(!results.iter().find(|r| r.rel.ends_with("sharedconfig.vdf")).unwrap().ok);
+        assert_eq!(fs::read(&cache).unwrap(), damaged);
+        assert_eq!(fs::read(&remote).unwrap(), cloud);
+        let global = FILES.iter().find(|p| p.scope == PackScope::SteamGlobal).unwrap();
+        assert!(!std::str::from_utf8(global.bytes).unwrap().contains("SteamDefaultDialog"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn roaming_cache_tracks_exact_content_without_resetting_the_remote_version() {
+        use sha1::{Digest, Sha1};
+        let content = b"complete roaming configuration";
+        let original = br#""7" { "ChangeNumber" "22" "Other" "keep" "sharedconfig.vdf" {
+            "sha" "old" "size" "1" "localtime" "2" "time" "9" "remotetime" "10"
+            "syncstate" "1" "persiststate" "0" "Custom" "keep" } }"#;
+        let updated = vdf::roaming_cache(original, content, 20, 20).unwrap();
+        let text = std::str::from_utf8(&updated).unwrap();
+        for (key, value) in [("ChangeNumber", "22"), ("Other", "keep"), ("remotetime", "10"),
+            ("localtime", "20"), ("time", "20"), ("syncstate", "3"), ("Custom", "keep")] {
+            assert!(text.contains(&format!("\"{key}\"\t\t\"{value}\"")));
+        }
+        assert!(text.contains(&format!("\"sha\"\t\t\"{:x}\"", Sha1::digest(content))));
+        assert_eq!(vdf::roaming_cache(&updated, content, 20, 99).unwrap(), updated);
+        for bad in [b"\"wrong\" {}".as_slice(), b"\"7\" {\"sharedconfig.vdf\" \"bad\"}", b"not vdf"] {
+            assert!(vdf::roaming_cache(bad, content, 20, 20).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "写入真实 Steam 账号配置；必须显式提供路径和 SID，并先退出 Steam"]
+    fn live_write_steam_account_presets() {
+        let root = std::env::var("GAMEREADY_STEAM_TEST_ROOT").expect("explicit Steam root required");
+        let sid = std::env::var("GAMEREADY_STEAM_TEST_SID3").expect("explicit Steam SID3 required");
+        assert!(sid3_to_id64(&sid).is_some() && steam_root_ok(Path::new(&root)));
+        assert!(!is_steam_running(), "Steam must be stopped before applying presets");
+        let report = write_all(Path::new(&root), PackScope::SteamAccount, Some(&sid));
+        assert!(report.iter().all(|r| r.ok), "{:?}", report.iter().filter_map(|r| r.err.as_deref()).collect::<Vec<_>>());
     }
 
     #[test]
@@ -2833,7 +2950,9 @@ mod regression_tests {
                 else { assert!(result.err.is_none()); }
                 assert_eq!(fs::read(&path).unwrap(), original.as_bytes());
                 assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
-                assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+                let expected_siblings = FILES.iter().filter(|p| p.scope == pack.scope)
+                    .filter(|p| dir.join(p.rel.replace("{SID3}", "1")).parent() == path.parent()).count();
+                assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), expected_siblings);
                 drop(guard);
             }
         }
