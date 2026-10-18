@@ -37,6 +37,13 @@ body.preview .window{
 .titlebar .logo{ width:16px; height:16px; }
 .titlebar .name{ font-size:12px; letter-spacing:.16em; color:var(--txt2); font-weight:600; }
 .titlebar .ver{ font-size:10.5px; color:var(--txt3); }
+.update-badge{ flex:none; max-width:132px; display:inline-block; padding:3px 7px; border:1px solid color-mix(in srgb,var(--acc) 32%,transparent); border-radius:99px; background:rgba(var(--acc-rgb),.08); color:var(--acc); font:10px "Segoe UI","Microsoft YaHei",sans-serif; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.update-badge[hidden]{ display:none; }
+.update-badge:hover{ border-color:var(--acc); background:rgba(var(--acc-rgb),.14); }
+.update-badge:disabled{ cursor:wait; opacity:.65; }
+.update-badge:focus-visible{ outline:2px solid var(--acc); outline-offset:2px; }
+.titlebar .update-badge{ flex:0 1 auto; min-width:0; margin-left:-3px; font-size:9px; padding:3px 6px; }
+.titlebar .logo,.titlebar .name,.titlebar .ver,.win-btns{ flex-shrink:0; }
 .win-btns{ margin-left:auto; display:flex; gap:4px; }
 .win-btn{ width:34px; height:28px; border:none; border-radius:6px; cursor:pointer; background:transparent; color:var(--txt3); font-size:12px; }
 #btnMin{ font-size:0; }   /* 走查：U+2500 字形垂直偏上，改伪元素画线居中 */
@@ -266,6 +273,12 @@ body.rail-dragging{ cursor:grabbing; }
 .acct-name .an{ flex:none; min-width:0; overflow:hidden; text-overflow:ellipsis; max-width:55%; color:var(--txt3); font-weight:400; }   /* 账号名最长占 55%，双保险省略 */
 .acct-sub{ font-size:10.5px; color:var(--txt3); margin-top:1px; }
 .acct .op{ display:flex; gap:6px; flex:none; }
+#acctCards .acct{ overflow:hidden; }
+#acctCards .acct:focus-visible{ outline:2px solid var(--steam); outline-offset:-2px; }
+#acctCards .acct-actions{ max-width:0; opacity:0; transform:translateX(16px); pointer-events:none; transition:max-width .16s ease,opacity .12s ease,transform .16s ease; }
+#acctCards .acct:hover .acct-actions,#acctCards .acct:focus-within .acct-actions{ max-width:160px; opacity:1; transform:translateX(0); pointer-events:auto; }
+#acctCards .acct-actions .op-btn{ flex:none; white-space:nowrap; }
+@media(prefers-reduced-motion:reduce){ #acctCards .acct-actions{ transition:none; } }
 .op-btn{ cursor:pointer; font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid var(--line); background:var(--panel2); color:var(--txt2); font-family:inherit; }   /* 走查：padding 10→8 腾出账号名宽度 */
 .op-btn.go{ color:#b9d5ff; border-color:#2c5aa0; background:linear-gradient(135deg,#123363,#0d2447); }
 .op-btn.go:hover{ box-shadow:0 0 10px rgba(90,162,255,.35); }
@@ -277,6 +290,7 @@ body.rail-dragging{ cursor:grabbing; }
 .add-row input::placeholder{ color:var(--txt3); }
 .add-row .btn{ height:32px; padding:0 14px; }   /* 与输入框同高对齐 */
 #recognizeLogin{ padding:0 9px; flex:none; }
+#recognizeLogin[hidden]{ display:none; }
 #recognizeLogin:disabled{ background:var(--panel2); border-color:var(--line); color:var(--txt3); box-shadow:none; }
 .f-row{ display:flex; flex-direction:column; gap:5px; margin-bottom:9px; }
 .f-row label{ font-size:10.5px; color:var(--txt3); letter-spacing:.08em; }
@@ -373,6 +387,10 @@ body.preview.backup-review .window{ flex-shrink:0; }
 .sw.on{ border-color:#fff; box-shadow:0 0 10px currentColor; }
 .sw:hover{ transform:scale(1.12); }
 /* ---- 日志页 ---- */
+.clear-logs{ margin-left:auto; flex:none; display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border:1px solid var(--line); border-radius:7px; color:var(--txt3); background:var(--panel2); font-size:11px; font-family:inherit; cursor:pointer; }
+.clear-logs svg{ width:12px; height:12px; }
+.clear-logs:hover{ color:var(--txt); border-color:#2c3a50; }
+.clear-logs:disabled{ opacity:.5; cursor:wait; }
 .chips{ display:flex; gap:6px; flex-wrap:wrap; margin:12px 0; }
 .chip{ cursor:pointer; font-size:11px; padding:5px 12px; border-radius:99px; font-family:inherit; border:1px solid var(--line); background:var(--panel2); color:var(--txt3); transition:.15s; }
 .chip:hover{ color:var(--txt2); border-color:#2c3a50; }
@@ -403,9 +421,18 @@ body.preview.backup-review .window{ flex-shrink:0; }
 .hero .slogan{ font-size:11px; color:var(--txt3); letter-spacing:.28em; margin-top:7px; margin-left:.28em; }
 .ver-pill{ display:inline-flex; align-items:center; gap:7px; margin-top:14px; font-size:10.5px; color:var(--txt2); border:1px solid var(--line); background:var(--panel); padding:4px 13px; border-radius:99px; font-family:"Cascadia Mono","Consolas",monospace; }
 .ver-pill .dot{ width:6px; height:6px; border-radius:50%; background:var(--acc); box-shadow:0 0 6px var(--acc); }
+.version-line{ display:flex; justify-content:center; align-items:center; gap:6px; margin-top:14px; }
+.version-line .ver-pill{ margin-top:0; }
 .update-btn{ margin-top:18px; cursor:pointer; height:34px; padding:0 22px; border-radius:10px; font-size:12px; font-weight:600; letter-spacing:.08em; font-family:inherit; border:1px solid #17558a; background:linear-gradient(135deg,#0c4a75,#082f4d); color:#c8ecff; box-shadow:0 0 18px rgba(var(--acc-rgb),.12); transition:.15s; display:inline-flex; align-items:center; gap:8px; }   /* 走查：占位功能缩小一档 */
 .update-btn:hover{ box-shadow:0 0 28px rgba(var(--acc-rgb),.3); }
 .update-btn svg{ width:14px; height:14px; }
+.update-btn:disabled{ cursor:wait; opacity:.65; }
+.update-btn[data-state="checking"] svg,.update-btn[data-state="downloading"] svg{ animation:spin 1.2s linear infinite; }
+.update-status{ max-width:326px; margin:9px auto 0; color:var(--txt3); font-size:10.5px; line-height:1.6; overflow-wrap:anywhere; }
+.update-status:empty{ display:none; }
+.update-status[data-state="error"]{ color:var(--err); }
+.update-status[data-state="downloaded"]{ color:var(--ok); }
+@media(prefers-reduced-motion:reduce){ .update-btn svg{ animation:none !important; } }
 .env-title{ font-size:10.5px; color:var(--txt3); letter-spacing:.14em; margin:18px 0 8px; padding:0 2px; }
 .env-group{ background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
 .env-row{ display:flex; align-items:center; gap:10px; padding:11px 14px; border-top:1px solid var(--line); }
@@ -457,7 +484,8 @@ body.preview.backup-review .window{ flex-shrink:0; }
   <div class="titlebar" data-tauri-drag-region>
     <!-- data-tauri-drag-region：拖拽区（logo/文字均可拖）；win-btns 不加，避免吃点击 -->
     <svg class="logo" data-tauri-drag-region viewBox="0 0 24 24" fill="none"><path d="M12 2 21 7v10l-9 5-9-5V7z" stroke="#00e5ff" stroke-width="1.6"/><path d="M12 7v6" stroke="#ffc247" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.15</span>
+    <span class="name" data-tauri-drag-region>GAMEREADY</span><span class="ver" id="verTag" data-tauri-drag-region>v0.1.16</span>
+    <button type="button" class="update-badge" id="titleUpdateBadge" hidden></button>
     <!-- 2026-09-29：最小化/关闭为纯功能按钮——无 tooltip、无悬停反馈（用户定稿） -->
     <div class="win-btns"><button class="win-btn" id="btnMin">─</button><button class="win-btn close" id="btnClose">✕</button></div>
   </div>
@@ -536,7 +564,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
           <div class="add-row">
             <input type="text" id="fUser" placeholder="账号" autocomplete="off" spellcheck="false">
             <input type="text" id="fPass" placeholder="密码" autocomplete="off" spellcheck="false">
-            <button class="btn" type="button" id="recognizeLogin" disabled>识别</button>
+            <button class="btn" type="button" id="recognizeLogin" hidden disabled>识别</button>
             <button class="btn primary" type="button" id="doLogin">登 录</button>
           </div>
           <div class="ap-list" id="acctCards"></div>
@@ -595,7 +623,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
       </section>
       <!-- ================ 覆盖日志（list_logs 渲染，后端已按时间降序） ================ -->
       <section class="page" id="page-logs">
-        <div class="page-head"><h1>覆盖日志</h1></div>
+        <div class="page-head"><h1>覆盖日志</h1><button type="button" class="clear-logs" id="clearLogs" aria-label="清除全部日志"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg><span>清除日志</span></button></div>
         <div class="chips" id="chips">
           <button type="button" class="chip on" data-f="all">全部</button>
           <button type="button" class="chip" data-f="lol">LOL 守护</button>
@@ -613,12 +641,12 @@ body.preview.backup-review .window{ flex-shrink:0; }
           </div>
           <h1>GAMEREADY</h1>
           <div class="slogan">一 键 就 绪 · 开 局 即 战</div>
-          <div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.15</div>
-          <br>
-          <button class="update-btn" id="upBtn">
+          <div class="version-line"><div class="ver-pill" id="aboutVer"><span class="dot"></span>v0.1.16</div><button type="button" class="update-badge" id="aboutUpdateBadge" hidden></button></div>
+          <button type="button" class="update-btn" id="upBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/></svg>
-            检查更新
+            <span id="upBtnLabel">检查更新</span>
           </button>
+          <div class="update-status" id="updateStatus" role="status" aria-live="polite"></div>
         </div>
         <div class="env-title">运行环境</div>
         <div class="env-group">
@@ -927,7 +955,6 @@ function render(){
 
 window.addEventListener('hashchange', render);
 location.hash = firstNavPage();   // 启动总是进第一个 tab（与拖拽后的顺序一致），忽略残留 hash
-render();
 
 /* ---------- R1 进程活跃绿点（game-active 事件驱动） ---------- */
 function setDot(dot, active){
@@ -1169,7 +1196,7 @@ async function refreshAccounts(){
     if(acctStale){ acctStale = false; refreshAccounts(); }
   }
 }
-/* 页内账号卡片（大按钮下方）：每行 登录/删除 按钮；当前登录标记仅给活跃登录态账号 */
+/* 页内账号卡片：操作在悬停或键盘聚焦时滑出，处理中的账号在副标题显示进度。 */
 function accountCard(a, cur){
   const isCur = a === cur;
   const target = steamOperation?.sid64 === String(a.steam_id64), busy = steamBusy();
@@ -1186,6 +1213,7 @@ function accountCard(a, cur){
   info.appendChild(el('div','acct-sub', target && steamOperation.phase === 'waiting' ? '等待 Steam 登录确认' : isCur ? ('当前登录 · 上次 '+fmtAcctTsShort(a.timestamp)) : fmtAcctTs(a.timestamp)));
   const op = el('div','op');
   if(!isCur){
+    op.classList.add('acct-actions');
     const go = el('button','op-btn go','登录'); go.type='button';
     const del = el('button','op-btn del','删除'); del.type='button';
     go.disabled = del.disabled = busy;
@@ -1345,7 +1373,8 @@ let clipboardSequence=null, clipboardCredentials=null, clipboardRequest=null, cl
 function canReadLoginClipboard(){return hasTauri && curPage()==='steam' && document.visibilityState==='visible' && document.hasFocus();}
 function updateRecognitionButton(){
   const button=$('recognizeLogin');
-  button.disabled=steamBusy() || recognizeBusy || !clipboardCredentials;
+  button.hidden=!clipboardCredentials;
+  button.disabled=steamBusy() || recognizeBusy;
   button.classList.toggle('primary',!button.disabled);
 }
 function clearLoginClipboard(){clipboardEpoch++;clipboardSequence=null;clipboardCredentials=null;updateRecognitionButton();}
@@ -1782,17 +1811,23 @@ function renderLogs(){
   if(logs.length > MAX_LOG_RENDER) frag.appendChild(el('div','logs-empty','仅显示最近 '+MAX_LOG_RENDER+' 条，更早的 '+(logs.length-MAX_LOG_RENDER)+' 条已省略'));
   list.appendChild(frag);
 }
-let logRequest = 0;
+let logRequest = 0, logClearBusy = false;
+const LOG_FILTER_LABELS = {all:'全部',lol:'LOL 守护',steam:'Steam 覆盖',acct:'账号切换'};
+function updateClearLogsButton(){
+  const button=$('clearLogs'), label=LOG_FILTER_LABELS[state.logFilter] || '当前分类';
+  button.disabled=logClearBusy;
+  button.ariaLabel='清除'+label+'日志';
+}
 async function loadLogs(){
-  const request = ++logRequest;
+  const request = ++logRequest, filter=state.logFilter;
   if(!hasTauri){ state.logs = []; renderLogs(); return; }   // 走查：预览模式也渲染空态而非整页空白
   try{
-    const list = await invoke('list_logs', { filter: state.logFilter });
-    if(request !== logRequest) return;
+    const list = await invoke('list_logs', { filter });
+    if(request !== logRequest || filter !== state.logFilter) return;
     state.logs = Array.isArray(list) ? list : [];
     state.logsDirty = false;
     renderLogs();
-  }catch(e){ toast('日志读取失败：'+errText(e), 'err'); }
+  }catch(e){ if(request === logRequest) toast('日志读取失败：'+errText(e), 'err'); }
 }
 function ensureLogs(){
   if(!state.logsLoaded || state.logsDirty){ state.logsLoaded = true; loadLogs(); }
@@ -1803,13 +1838,37 @@ $('chips').addEventListener('click', e=>{
   document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
   c.classList.add('on');
   state.logFilter = c.dataset.f || 'all';
+  updateClearLogsButton();
   loadLogs();
 });
-/* log-appended：筛选匹配则前插新条目并重建时间分组；否则标记待刷新 */
+/* 清理直接按点击时的分类执行；分类切换、清理事件和新增日志都会淘汰旧请求。 */
+function onLogsCleared(){
+  ++logRequest;
+  state.logsDirty=true;
+  if(curPage()==='logs') loadLogs();
+}
+$('clearLogs').addEventListener('click',async()=>{
+  if(logClearBusy) return;
+  if(!hasTauri){ toast(NO_TAURI_MSG,'err'); return; }
+  const filter=state.logFilter;
+  logClearBusy=true;
+  ++logRequest;
+  updateClearLogsButton();
+  try{
+    await invoke('clear_logs',{filter});
+    onLogsCleared();
+    toast('已清除'+(LOG_FILTER_LABELS[filter] || '当前分类')+'日志','ok');
+  }catch(e){
+    state.logsDirty=true;
+    if(curPage()==='logs') loadLogs();
+    toast('日志清理失败：'+errText(e),'err');
+  }finally{logClearBusy=false;updateClearLogsButton();}
+});
+/* 匹配当前分类的新日志重新读取持久化列表，避免与清理或未完成的列表请求竞争。 */
 function onLogAppended(lg){
   state.logsDirty = true;
   if(curPage()==='logs' && (state.logFilter==='all' || lg.kind===state.logFilter)){
-    if(Array.isArray(state.logs)){ state.logs.unshift(lg); state.logs.length = Math.min(state.logs.length,5000); renderLogs(); state.logsDirty = false; }
+    loadLogs();
   }
 }
 
@@ -1961,16 +2020,71 @@ $('btnClose').addEventListener('click', async ()=>{
   }catch(_){ /* 窗口操作失败静默 */ }
 });
 
-/* ---------- 关于页：真实版本号 + 更新入口占位 ---------- */
-$('upBtn').addEventListener('click', ()=>toast('检查更新：敬请期待'));
-(async ()=>{
-  let v = '0.1.15';
+/* ---------- 版本更新：后台检查，发现新版本后持续提示，点击下载最新 release 的 exe ---------- */
+let updateSnapshot={current_version:'0.1.16',latest_version:null,available:false,status:'idle',message:'',downloaded_path:null};
+let updateRevision=0, updateActionBusy=false;
+function updateVersion(v){return String(v || '').replace(/^v/i,'');}
+function renderUpdate(){
+  const snapshot=updateSnapshot, status=snapshot.status || 'idle';
+  const current=updateVersion(snapshot.current_version), latest=updateVersion(snapshot.latest_version);
+  const available=!!(snapshot.available && latest), busy=updateActionBusy || status==='checking' || status==='downloading';
+  $('verTag').textContent='v'+current;
+  $('aboutVer').innerHTML='<span class="dot"></span>v'+esc(current);
+  for(const id of ['titleUpdateBadge','aboutUpdateBadge']){
+    const badge=$(id);
+    badge.hidden=!available;
+    badge.textContent=available?'有最新版本 v'+latest:'';
+    badge.disabled=busy;
+    badge.ariaLabel=status==='downloaded'?'新版本 v'+latest+' 已下载，点击打开所在文件夹':'下载最新版本 v'+latest;
+  }
+  const button=$('upBtn');
+  button.disabled=busy;
+  button.dataset.state=status;
+  $('upBtnLabel').textContent=status==='downloading'?'正在下载…':status==='checking'?'正在检查…':
+    status==='downloaded' && available?'打开下载文件夹':available?'更新至 v'+latest:status==='error'?'重新检查更新':'检查更新';
+  const hint=$('updateStatus');
+  hint.dataset.state=status;
+  hint.textContent=status==='downloaded' && snapshot.downloaded_path?(snapshot.message?.includes('失败')?snapshot.message+'。':'')+'已保存至 '+snapshot.downloaded_path+'。退出 GameReady 后替换旧 EXE，保留原 Data。':
+    snapshot.message || (status==='checking'?'正在检查 GitHub 最新版本…':status==='downloading'?'正在下载最新版本…':available?'发现新版本，点击更新下载。':'');
+}
+function applyUpdate(snapshot){
+  if(!snapshot || typeof snapshot!=='object') return;
+  updateSnapshot={...updateSnapshot,...snapshot};
+  renderUpdate();
+}
+async function refreshUpdateStatus(){
+  const revision=updateRevision;
   try{
-    if(hasTauri && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function')
-      v = await window.__TAURI__.app.getVersion();
-  }catch(_){ /* 取不到则用写死的 0.1.15 */ }
-  $('verTag').textContent = 'v'+v;
-  $('aboutVer').innerHTML = '<span class="dot"></span>v'+esc(v);
+    const snapshot=await invoke('update_status');
+    if(revision===updateRevision) applyUpdate(snapshot);
+  }catch(_){ /* 后台更新状态暂不可用时保留本地版本，手动检查可重试。 */ }
+}
+async function runUpdate(){
+  if(updateActionBusy || ['checking','downloading'].includes(updateSnapshot.status)) return;
+  if(!hasTauri){toast(NO_TAURI_MSG,'err');return;}
+  const download=!!updateSnapshot.available, revision=++updateRevision;
+  updateActionBusy=true;
+  renderUpdate();
+  try{
+    const snapshot=await invoke(download?'download_update':'check_update');
+    if(revision===updateRevision) applyUpdate(snapshot);
+    if(snapshot?.status==='error') toast(snapshot.message || (download?'更新下载失败':'检查更新失败'),'err');
+    else if(snapshot?.status==='downloaded') toast('新版本已保存'+(snapshot.downloaded_path?'：'+snapshot.downloaded_path:''),'ok');
+    else if(snapshot?.available) toast('发现最新版本 v'+updateVersion(snapshot.latest_version),'ok');
+    else toast(snapshot?.message || '当前已是最新版本','ok');
+  }catch(e){
+    applyUpdate({status:'error',message:errText(e)});
+    toast((download?'更新下载失败：':'检查更新失败：')+errText(e),'err');
+  }finally{updateActionBusy=false;renderUpdate();}
+}
+for(const id of ['upBtn','titleUpdateBadge','aboutUpdateBadge']) $(id).addEventListener('click',runUpdate);
+(async()=>{
+  try{
+    if(hasTauri && typeof window.__TAURI__.app?.getVersion==='function'){
+      const current_version=await window.__TAURI__.app.getVersion();
+      applyUpdate({current_version});
+    }
+  }catch(_){ /* 本地版本 API 不可用时使用内置版本。 */ }
 })();
 
 /* ---------- 初始化：先注册事件监听（避免错过启动早期推送），再拉取状态 ---------- */
@@ -2003,10 +2117,13 @@ async function init(){
   await on('steam-operation', e=>applySteamOperation(e.payload));
   await on('steam-login-finished', e=>loginFinished(e.payload));
   await on('log-appended', e=>{ if(e.payload) onLogAppended(e.payload); });
+  await on('logs-cleared',()=>onLogsCleared());
+  await on('update-changed',e=>{++updateRevision;applyUpdate(e.payload);});
   await on('steam-accounts-changed', ()=>{ refreshAccounts();                  // 模态开着会自动刷新列表
                                              refreshBackup(false);
                                              refreshStatus().catch(()=>{}); });
   await on('backup-changed',e=>applyBackup(e.payload,false));
+  refreshUpdateStatus();
   try{ await refreshStatus(); }
   catch(e){ toast('状态读取失败：'+errText(e), 'err'); }
   try{ applySettings(await invoke('get_settings')); }
@@ -2014,6 +2131,7 @@ async function init(){
   refreshAccounts();
   refreshBackup(true);
 }
+render();
 init();
 
 /* 浏览器 UI 审阅入口：仅在无 Tauri 且 ?preview=backup 时使用虚拟示例。 */

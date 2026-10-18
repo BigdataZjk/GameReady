@@ -1,5 +1,6 @@
 //! Steam 凭据备份：本地持久队列、SFTP 合并、读回确认与可恢复重试。
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -234,28 +235,23 @@ fn error(code: &str, message: &str, retryable: bool) -> Error {
 
 fn now() -> i64 { chrono::Utc::now().timestamp_millis() }
 
-fn local_error(context: &str, e: std::io::Error) -> Error {
-    error("local_error", &format!("{context}：{e}；待同步记录不会被清空"), false)
-}
-
 fn read_store(path: &Path) -> Result<Store> {
-    match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|_| error("local_error",
-            "Data\\backup.json 格式损坏，请修复或还原该文件；原文件已保留", false)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
-        Err(e) => Err(local_error("读取备份配置失败", e)),
-    }
+    let value = crate::account_store::read_backup(path)
+        .map_err(|message| error("local_error", &message, false))?;
+    serde_json::from_value(value).map_err(|_| error("local_error",
+        "Data\\accounts.json 中的备份数据格式损坏，请修复或还原该文件；原文件已保留", false))
 }
 
 fn write_store(path: &Path, store: &Store) -> Result<()> {
-    let text = serde_json::to_vec_pretty(store)
+    let value = serde_json::to_value(store)
         .map_err(|_| error("local_error", "备份数据序列化失败", false))?;
-    crate::atomic_write(path, &text, true).map_err(|e| local_error("保存备份数据失败", e))
+    crate::account_store::write_backup(path, &value)
+        .map_err(|message| error("local_error", &message, false))
 }
 
 fn edit<T>(f: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let path = crate::data_dir().join("backup.json");
+    let path = crate::creds_path();
     let mut store = read_store(&path)?;
     store.client_id = CLIENT_ID.clone();
     store.state_version = store.state_version.saturating_add(1);
@@ -267,7 +263,7 @@ fn edit<T>(f: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
 
 fn load() -> Result<Store> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut store = read_store(&crate::data_dir().join("backup.json"))?;
+    let mut store = read_store(&crate::creds_path())?;
     // 同一 Data 配置分发到不同电脑时，仍使用各设备独立的远程锁身份。
     store.client_id = CLIENT_ID.clone();
     Ok(store)
@@ -596,7 +592,7 @@ impl Remote {
         let ssh_config = client::Config { inactivity_timeout: Some(Duration::from_secs(35)), ..Default::default() };
         let connected = timed(client::connect(Arc::new(ssh_config), (config.host.as_str(), config.port), handler), "SSH 连接").await;
         if mismatch.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(error("host_key_error", "NAS 主机密钥与已保存记录不一致，连接已停止；请核对服务器，确认更换后关闭程序并更新 Data\\backup.json 中的 fingerprint", false));
+            return Err(error("host_key_error", "NAS 主机密钥与已保存记录不一致，连接已停止；请核对服务器，确认更换后关闭程序并更新 Data\\accounts.json 中的 backup.config.fingerprint", false));
         }
         let mut ssh = connected?;
         if !timed(ssh.authenticate_password(&config.username, &config.password), "NAS 登录").await?.success() {
@@ -1367,7 +1363,7 @@ mod tests {
     fn durable_queue_and_corrupt_local_file_are_preserved() {
         let dir = std::env::temp_dir().join(format!("gameready-backup-test-{}", Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
-        let path = dir.join("backup.json");
+        let path = dir.join("accounts.json");
         let mut s = Store::default();
         s.enqueue("user", " local password ", "新增登录");
         s.blocked = true; s.status = "auth_error".into();

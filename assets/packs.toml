@@ -2007,6 +2007,7 @@ content = '''
 			"Steam"
 			{
 				"AutoUpdateWindowEnabled"		"0"
+				"SteamDefaultDialog"		"#app_games"
 				"Rate"		"30000"
 			}
 		}
@@ -2034,15 +2035,15 @@ content = '''
 		"InGameOverlayShowFPSCorner"		"2"
 		"InGameOverlayShowFPSDetailLevel"		"2"
 		"InGameOverlayScreenshotHotKey"		"KEY_NONE"
-		"InGameOverlayScreenshotNotification"		"1"
+		"InGameOverlayScreenshotNotification"		"0"
 		"InGameOverlayScreenshotSaveUncompressed"		"1"
 	}
 	"friends"
 	{
-		"Notifications_ShowIngame"		"1"
+		"Notifications_ShowIngame"		"0"
 		"Notifications_ShowOnline"		"0"
-		"Notifications_ShowMessage"		"1"
-		"Notifications_EventsAndAnnouncements"		"1"
+		"Notifications_ShowMessage"		"0"
+		"Notifications_EventsAndAnnouncements"		"0"
 		"Sounds_PlayIngame"		"0"
 		"Sounds_PlayOnline"		"0"
 		"Sounds_PlayMessage"		"1"

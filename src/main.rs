@@ -28,6 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
 use windows::Win32::System::Threading::{GetCurrentProcess, WaitForSingleObject, INFINITE};
 
 mod backup;
+mod account_store;
+mod update;
 mod vdf {
 //! Steam VDF parsing, account records and preference merging.
 #[derive(Clone, Debug, PartialEq)]
@@ -279,6 +281,10 @@ fn main() {
             commands::delete_account,
             commands::login_new,
             commands::list_logs,
+            commands::clear_logs,
+            update::update_status,
+            update::check_update,
+            update::download_update,
             commands::backup_get,
             commands::backup_save,
             commands::backup_test,
@@ -311,6 +317,7 @@ fn main() {
             // ④ 进程活跃监听（R1 绿点）：后台轮询 LOL / Steam 客户端，变化时推 "game-active"
             spawn(app.handle().clone());
             backup::start(app.handle().clone());
+            update::start(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -575,6 +582,7 @@ pub fn log(kind: &str, title: &str, detail: &str, ok: bool) {
         detail: detail.to_string(),
         ok,
     };
+    let _lock = LOG_LOCK.lock().unwrap();
     append_and_truncate(&entry);
     if let Some(app) = APP.get() {
         let _ = app.emit("log-appended", &entry);
@@ -583,7 +591,7 @@ pub fn log(kind: &str, title: &str, detail: &str, ok: bool) {
 
 /// 追加一行 JSON；随后检查总行数，超限则重写保留最新 MAX_ENTRIES 条
 fn append_and_truncate(entry: &LogEntry) {
-    let _lock = LOG_LOCK.lock().unwrap(); // 追加与截断重写整体串行
+    // 调用方持有 LOG_LOCK，文件变更与事件推送保持同一顺序。
     let path = logs_path();
     if let Ok(line) = serde_json::to_string(entry) {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
@@ -603,6 +611,72 @@ fn append_and_truncate(entry: &LogEntry) {
 }
 
 // 日志读取命令位于 commands 模块，按时间降序返回。
+
+fn log_filter_matches(filter: &str, kind: &str) -> bool {
+    filter == "all" || filter.is_empty() || filter == kind
+}
+
+/// 调用方持有 LOG_LOCK；分类清理保留其他分类和无法解析的原始行。
+fn clear_log_file(path: &Path, filter: &str) -> Result<usize, String> {
+    if !matches!(filter, "all" | "lol" | "steam" | "acct") {
+        return Err("无法识别的日志分类，未清理日志".into());
+    }
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(format!("读取日志失败：{e}")),
+    };
+    let mut removed = 0;
+    let mut keep = Vec::with_capacity(bytes.len());
+    for line in bytes.split_inclusive(|b| *b == b'\n') {
+        let entry = serde_json::from_slice::<LogEntry>(line).ok();
+        if filter == "all" || entry.as_ref().is_some_and(|e| log_filter_matches(filter, &e.kind)) {
+            if entry.is_some() { removed += 1; }
+        } else {
+            keep.extend_from_slice(line);
+        }
+    }
+    if keep != bytes {
+        atomic_write(path, &keep, true).map_err(|e| format!("清理日志失败：{e}，原文件已保留"))?;
+    }
+    Ok(removed)
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_logs_matches_display_filter_and_retains_other_bytes() {
+        let dir = std::env::temp_dir().join(format!("gameready-logs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("logs.jsonl");
+        let entry = |kind: &str| serde_json::to_string(&LogEntry {
+            ts_ms: 123, kind: kind.into(), title: "fixture".into(), detail: String::new(), ok: true,
+        }).unwrap();
+        let steam = entry("steam") + "\r\n";
+        let acct = entry("acct"); // 无末尾换行的旧记录也保留。
+        let malformed = "{broken\n";
+        let original = format!("{}\n{steam}{malformed}{acct}", entry("lol"));
+        for (filter, expected) in [
+            ("lol", format!("{steam}{malformed}{acct}")),
+            ("steam", format!("{}\n{malformed}{acct}", entry("lol"))),
+            ("acct", format!("{}\n{steam}{malformed}", entry("lol"))),
+        ] {
+            fs::write(&path, &original).unwrap();
+            assert_eq!(clear_log_file(&path, filter).unwrap(), 1);
+            assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        }
+        fs::write(&path, &original).unwrap();
+        assert!(clear_log_file(&path, "unknown").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(clear_log_file(&path, "all").unwrap(), 3);
+        assert!(fs::read(&path).unwrap().is_empty());
+        assert_eq!(clear_log_file(&path, "all").unwrap(), 0);
+        assert_eq!(clear_log_file(&dir.join("missing.jsonl"), "all").unwrap(), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
 
 // 进程状态监听
 /// 轮询间隔（合同：2s）
@@ -1032,6 +1106,43 @@ pub struct SteamAccount {
     pub timestamp: i64,
 }
 
+/// 登录时间属于便携数据，不能依赖 Steam 退出/重启时可能清空的历史字段。
+static LOGIN_TIMES_OP: Mutex<()> = Mutex::new(());
+
+fn login_times_path() -> PathBuf { creds_path() }
+
+fn valid_login_timestamp(timestamp: i64) -> bool {
+    timestamp > 0 && timestamp <= chrono::Utc::now().timestamp().saturating_add(300)
+}
+
+#[cfg(test)]
+fn read_login_times(path: &Path) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    let mut times = account_store::read_login_times(path)?;
+    times.retain(|sid64, timestamp| sid64_to_sid3(sid64).is_some() && valid_login_timestamp(*timestamp));
+    Ok(times)
+}
+
+/// 合并只用于列表展示；登录确认始终读取 Steam 原始记录，不能用缓存确认新尝试。
+fn merge_login_times(path: &Path, accounts: &mut [SteamAccount]) -> Result<(), String> {
+    let values = accounts.iter().filter(|a| sid64_to_sid3(&a.steam_id64).is_some())
+        .map(|a| (a.steam_id64.clone(), a.account_name.clone(),
+            if valid_login_timestamp(a.timestamp) { a.timestamp } else { 0 })).collect::<Vec<_>>();
+    let times = account_store::merge_login_times(path, &values)?;
+    for account in accounts { account.timestamp = times.get(&account.steam_id64).copied().unwrap_or(0); }
+    Ok(())
+}
+
+fn persist_confirmed_login(account: &SteamAccount) {
+    let _times_op = LOGIN_TIMES_OP.lock().unwrap();
+    if let Err(error) = merge_login_times(&login_times_path(), &mut [account.clone()]) {
+        log("acct", "保存最近登录时间失败", &error, false);
+    }
+}
+
+fn remove_login_time(path: &Path, sid64: &str) -> Result<(), String> {
+    account_store::remove_login_time(path, sid64)
+}
+
 // ---------------- 基础路径与注册表 ----------------
 
 /// 从设置读取 Steam 根目录；未设置返回 Err
@@ -1088,14 +1199,20 @@ fn login_success_in_log(text: &str, sid3: &str, since: i64) -> Option<i64> {
     })
 }
 
-fn read_login_success(root: &str, sid3: &str, offset: u64, since: i64) -> Option<i64> {
+fn read_connection_log_tail(root: &str, offset: u64) -> Option<(String, bool)> {
     let mut file = File::open(connection_log(root)).ok()?;
     let len = file.metadata().ok()?.len();
-    // 只读取本次启动后的新增内容；日志轮换后要求时间晚于启动。
     let rotated = len < offset;
     file.seek(SeekFrom::Start(if rotated { 0 } else { offset }.max(len.saturating_sub(128 * 1024)))).ok()?;
-    let mut text = String::new();
-    file.take(128 * 1024).read_to_string(&mut text).ok()?;
+    let mut bytes = Vec::new();
+    file.take(128 * 1024).read_to_end(&mut bytes).ok()?;
+    // 从尾部截取可能落在 UTF-8 字符中间；残缺字符不影响后续完整成功记录。
+    Some((String::from_utf8_lossy(&bytes).into_owned(), rotated))
+}
+
+fn read_login_success(root: &str, sid3: &str, offset: u64, since: i64) -> Option<i64> {
+    // 只读取本次启动后的新增内容；日志轮换后要求时间晚于启动。
+    let (text, rotated) = read_connection_log_tail(root, offset)?;
     login_success_in_log(&text, sid3, since + i64::from(rotated))
 }
 
@@ -1111,14 +1228,31 @@ fn session_account(root: &str, sid64: &str, history: &[RawAccount]) -> Result<Op
 }
 
 fn accounts_for_root(root: &str) -> Result<Vec<SteamAccount>, String> {
+    // 与删除后的 VDF 写入/时间清理共用锁，避免旧列表回写已删除账号的时间。
+    let _times_op = LOGIN_TIMES_OP.lock().unwrap();
+    accounts_for_root_with_login_times(root, &login_times_path())
+}
+
+fn accounts_for_root_with_login_times(root: &str, times_path: &Path) -> Result<Vec<SteamAccount>, String> {
     let history = login_history(root)?;
     let mut accounts: Vec<_> = history.iter().map(to_account).collect();
     if let Some(sid3) = active_steam_sid3(root) {
         let sid64 = sid3_to_id64(&sid3).ok_or("当前 Steam 账号无效")?;
-        if let Some(account) = accounts.iter_mut().find(|a| a.steam_id64 == sid64) {
-            account.timestamp = account.timestamp.max(read_login_success(root, &sid3, 0, 0).unwrap_or(0));
-        } else if let Some(account) = session_account(root, &sid64, &history)? { accounts.push(account); }
+        if !accounts.iter().any(|a| a.steam_id64 == sid64) {
+            if let Some(account) = session_account(root, &sid64, &history)? { accounts.push(account); }
+        }
     }
+    // 首次迁移时也恢复非当前账号留下的服务器 OK 时间；一次最多读 128 KiB。
+    // 历史成功记录仅用于展示/存储，后台登录确认另行校验本次启动后的新增记录。
+    if let Some((text, _)) = read_connection_log_tail(root, 0) {
+        for account in &mut accounts {
+            let known = if valid_login_timestamp(account.timestamp) { account.timestamp } else { 0 };
+            account.timestamp = known.max(sid64_to_sid3(&account.steam_id64)
+                .and_then(|sid3| login_success_in_log(&text, &sid3, 0))
+                .filter(|timestamp| valid_login_timestamp(*timestamp)).unwrap_or(0));
+        }
+    }
+    merge_login_times(times_path, &mut accounts)?;
     Ok(accounts)
 }
 
@@ -1299,32 +1433,19 @@ fn creds_path() -> PathBuf {
 }
 
 fn read_creds(path: &Path) -> Result<std::collections::BTreeMap<String, String>, String> {
-    match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|_| "Data\\accounts.json 格式损坏，原文件已保留，请修复后重试".into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
-        Err(e) => Err(format!("读取本地账号文件失败：{e}")),
-    }
+    account_store::read_credentials(path)
 }
 
 /// 键 = 账号名（登录发起前即已知，无需等 vdf 出现 sid64）
 pub fn save_cred_by_name(account: &str, password: &str) -> Result<(), String> {
-    let mut m = read_creds(&creds_path())?;
-    replace_credential(&mut m, account, password);
     backup::login_attempt_started(account).map_err(|e| e.message)?;
-    atomic_json(&creds_path(), &m)?;
+    account_store::set_credential(&creds_path(), account, password)?;
     backup::credentials_changed().map_err(|e| e.message)
 }
 
-fn replace_credential(m: &mut std::collections::BTreeMap<String, String>, account: &str, password: &str) {
-    m.retain(|k, _| !k.eq_ignore_ascii_case(account));
-    m.insert(account.to_ascii_lowercase(), password.into());
-}
-
 pub fn remove_cred_by_name(account: &str) -> Result<(), String> {
-    let mut m = read_creds(&creds_path())?;
-    m.retain(|k, _| !k.eq_ignore_ascii_case(account));
     backup::login_attempt_started(account).map_err(|e| e.message)?;
-    atomic_json(&creds_path(), &m)?;
+    account_store::remove_credential(&creds_path(), account)?;
     backup::credentials_changed().map_err(|e| e.message)
 }
 
@@ -1566,6 +1687,7 @@ fn watch_login(mut attempt: LoginAttempt, app: AppHandle) -> Result<(), String> 
                         if !attempt.current() { return Err("登录期间密码或路径已改变，本次确认已停止，请重新登录".into()); }
                         // 取得锁后再次确认，避免外部 Steam 切号使第一次观察过时。
                         if let Some(account) = attempt.confirmed()? {
+                            persist_confirmed_login(&account);
                             if !attempt.restoring {
                                 if let Some(password) = &attempt.password { backup::confirmed_login(&attempt.account, password, "Steam 登录确认"); }
                             }
@@ -1688,14 +1810,18 @@ fn delete_locked(sid64: &str) -> Result<String, String> {
     if was_running && !wait_steam_exit(10) {
         return Err("Steam 未能在 10 秒内完全退出，请手动退出后再删除账号".to_string());
     }
-    if let Err(e) = write_vdf(&root, &accounts) {
-        if was_running {
-            if let Err(recovery) = relaunch_with_cred(&root, &autologin_before) { log("steam", "恢复 Steam 失败", &recovery, false); }
+    let mut cleanup_errors = Vec::new();
+    {
+        let _times_op = LOGIN_TIMES_OP.lock().unwrap();
+        if let Err(e) = write_vdf(&root, &accounts) {
+            if was_running {
+                if let Err(recovery) = relaunch_with_cred(&root, &autologin_before) { log("steam", "恢复 Steam 失败", &recovery, false); }
+            }
+            return Err(e);
         }
-        return Err(e);
+        if let Err(e) = remove_login_time(&login_times_path(), sid64) { cleanup_errors.push(e); }
     }
     // 同步删除保存的登录凭据（完全清理的一部分）
-    let mut cleanup_errors = Vec::new();
     if let Err(e) = remove_cred_by_name(&account_name) { cleanup_errors.push(e); }
     // 删除该账号的 userdata 目录（含 localconfig.vdf 等）；不存在或删除失败不阻断流程
     if let Some(sid3) = sid64_to_sid3(sid64) {
@@ -2617,6 +2743,40 @@ mod regression_tests {
     }
 
     #[test]
+    fn global_and_account_templates_both_select_library_at_the_steam_preference_path() {
+        for pack in FILES.iter().filter(|p| p.scope == PackScope::SteamGlobal || p.rel.ends_with("sharedconfig.vdf")) {
+            let root = if pack.scope == PackScope::SteamGlobal { "InstallConfigStore" } else { "UserRoamingConfigStore" };
+            let original = format!("\"{root}\" {{ \"Software\" {{ \"Valve\" {{ \"Steam\" {{ \"SteamDefaultDialog\" \"#app_store\" \"OtherPreference\" \"keep\" }} }} }} }}");
+            let merged = vdf::merge(original.as_bytes(), pack.bytes).unwrap();
+            let text = std::str::from_utf8(&merged).unwrap();
+            assert!(text.starts_with(&format!("\"{root}\"\n")));
+            assert_eq!(text.matches("\"SteamDefaultDialog\"\t\t\"#app_games\"").count(), 1);
+            assert!(!text.contains("#app_store"));
+            assert!(text.contains("\"OtherPreference\"\t\t\"keep\""));
+        }
+    }
+
+    #[test]
+    fn account_popups_are_disabled_while_message_sound_and_unrelated_settings_remain() {
+        let pack = FILES.iter().find(|p| p.rel.ends_with("localconfig.vdf")).unwrap();
+        let original = br#""UserLocalConfigStore" {
+            "system" { "InGameOverlayScreenshotNotification" "1" "Unrelated" "keep" }
+            "friends" { "Notifications_ShowIngame" "1" "Notifications_ShowOnline" "1"
+                "Notifications_ShowMessage" "1" "Notifications_EventsAndAnnouncements" "1"
+                "Sounds_PlayMessage" "0" "OtherFriendSetting" "keep" }
+        }"#;
+        let merged = vdf::merge(original, pack.bytes).unwrap();
+        let text = std::str::from_utf8(&merged).unwrap();
+        for key in ["InGameOverlayScreenshotNotification", "Notifications_ShowIngame", "Notifications_ShowOnline",
+            "Notifications_ShowMessage", "Notifications_EventsAndAnnouncements"] {
+            assert!(text.contains(&format!("\"{key}\"\t\t\"0\"")));
+            assert!(!text.contains(&format!("\"{key}\"\t\t\"1\"")));
+        }
+        for key in ["Unrelated", "OtherFriendSetting"] { assert!(text.contains(&format!("\"{key}\"\t\t\"keep\""))); }
+        assert!(text.contains("\"Sounds_PlayMessage\"\t\t\"1\""));
+    }
+
+    #[test]
     fn unchanged_steam_templates_preserve_bom_comments_and_crlf() {
         for pack in FILES.iter().filter(|p| p.scope != PackScope::Lol) {
             let template = std::str::from_utf8(pack.bytes).unwrap().replace("\r\n", "\n").replace('\n', "\r\n");
@@ -2748,12 +2908,24 @@ mod regression_tests {
 
     #[test]
     fn local_duplicates_are_replaced_with_latest_password() {
-        let mut creds = std::collections::BTreeMap::from([
-            ("Player".into(), "old".into()), ("PLAYER".into(), "older".into()), ("other".into(), "keep".into())]);
-        replace_credential(&mut creds, "player", " latest password ");
+        let dir = std::env::temp_dir().join(format!("gameready-duplicate-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("accounts.json");
+        atomic_json(&path, &serde_json::json!({
+            "version": 2,
+            "accounts": {
+                "Player": { "password": "old" },
+                "PLAYER": { "password": "older" },
+                "other": { "password": "keep" }
+            },
+            "backup": {}
+        })).unwrap();
+        account_store::set_credential(&path, "player", " latest password ").unwrap();
+        let creds = read_creds(&path).unwrap();
         assert_eq!(creds.len(), 2);
         assert_eq!(creds["player"], " latest password ");
         assert_eq!(creds["other"], "keep");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2761,17 +2933,122 @@ mod regression_tests {
         let dir = std::env::temp_dir().join(format!("gameready-store-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         let path = dir.join("accounts.json");
-        let mut creds = std::collections::BTreeMap::new();
-        replace_credential(&mut creds, "player", "one");
-        atomic_json(&path, &creds).unwrap();
-        replace_credential(&mut creds, "PLAYER", "two");
-        atomic_json(&path, &creds).unwrap();
+        account_store::set_credential(&path, "player", "one").unwrap();
+        account_store::set_credential(&path, "PLAYER", "two").unwrap();
         assert_eq!(read_creds(&path).unwrap()["player"], "two");
         fs::write(&path, b"{broken").unwrap();
         assert!(read_creds(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"{broken");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         fs::remove_file(path).unwrap(); fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn portable_login_times_survive_missing_steam_timestamps_and_keep_the_latest_success() {
+        let dir = std::env::temp_dir().join(format!("gameready-login-times-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("config")).unwrap();
+        let root = dir.to_str().unwrap();
+        let times_path = dir.join("accounts.json");
+        let sid = "76561197960265729";
+        let other = "76561197960265730";
+        write_vdf(root, &[login_record(sid, "player", 100), login_record(other, "other", 80)]).unwrap();
+        let accounts = accounts_for_root_with_login_times(root, &times_path).unwrap();
+        assert_eq!(accounts.iter().map(|a| a.timestamp).collect::<Vec<_>>(), vec![100, 80]);
+        assert_eq!(read_login_times(&times_path).unwrap()[sid], 100);
+
+        // 仅依赖磁盘重新读取；Steam 重启后缺少/重置时间字段也保留每个账号的记录。
+        let mut missing = login_record(sid, "PLAYER", 0);
+        missing.fields.retain(|(name, _)| name != "Timestamp");
+        write_vdf(root, &[missing, login_record(other, "other", 0)]).unwrap();
+        let restarted = accounts_for_root_with_login_times(root, &times_path).unwrap();
+        assert_eq!(restarted.iter().map(|a| a.timestamp).collect::<Vec<_>>(), vec![100, 80]);
+
+        // 之后的真实 Steam 时间更新缓存，旧值/无效值都不能将其回退。
+        for (observed, expected) in [(120, 120), (110, 120), (-1, 120), (i64::MAX, 120)] {
+            write_vdf(root, &[login_record(sid, "player", observed)]).unwrap();
+            assert_eq!(accounts_for_root_with_login_times(root, &times_path).unwrap()[0].timestamp, expected);
+            assert_eq!(read_login_times(&times_path).unwrap()[sid], expected);
+            assert_eq!(read_login_times(&times_path).unwrap()[other], 80);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn portable_login_times_do_not_confirm_attempts_and_delete_only_the_selected_account() {
+        let dir = std::env::temp_dir().join(format!("gameready-login-time-delete-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("accounts.json");
+        let sid = "76561197960265729";
+        let other = "76561197960265730";
+        let mut displayed = [to_account(&login_record(sid, "player", 120)), to_account(&login_record(other, "other", 80))];
+        merge_login_times(&path, &mut displayed).unwrap();
+
+        let attempt = login_attempt_fixture();
+        let raw_records = [to_account(&login_record(sid, "player", 100)), to_account(&login_record(other, "other", 80))];
+        assert!(attempt.observed(&raw_records, Some(sid)).unwrap().is_none());
+        assert!(attempt.observed_connection(raw_records[0].clone(), None).is_none());
+        assert_eq!(read_login_times(&path).unwrap()[sid], 120);
+
+        remove_login_time(&path, sid).unwrap();
+        remove_login_time(&path, sid).unwrap();
+        let stored = read_login_times(&path).unwrap();
+        assert!(!stored.contains_key(sid));
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[other], 80);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn portable_login_times_recover_inactive_accounts_from_confirmed_connection_history() {
+        use chrono::TimeZone;
+        let dir = std::env::temp_dir().join(format!("gameready-login-time-migrate-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("config")).unwrap();
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        let root = dir.to_str().unwrap();
+        let path = dir.join("accounts.json");
+        let sid = "76561197960265729";
+        let other = "76561197960265730";
+        write_vdf(root, &[login_record(sid, "player", 0), login_record(other, "other", 0)]).unwrap();
+        let success = "[2026-10-17 18:45:01] RecvMsgClientLogOnResponse() : [U:1:1] 'OK'\n";
+        let failure = "[2026-10-17 18:45:02] RecvMsgClientLogOnResponse() : [U:1:1] 'InvalidPassword'\n\
+            [2026-10-17 18:45:03] RecvMsgClientLogOnResponse() : [U:1:2] 'InvalidPassword'\n";
+        fs::write(connection_log(root), format!("{success}{failure}")).unwrap();
+        let expected = chrono::Local.with_ymd_and_hms(2026, 10, 17, 18, 45, 1).single().unwrap().timestamp();
+        let accounts = accounts_for_root_with_login_times(root, &path).unwrap();
+        assert_eq!(accounts[0].timestamp, expected);
+        assert_eq!(accounts[1].timestamp, 0);
+        assert_eq!(read_login_times(&path).unwrap()[sid], expected);
+        assert!(!read_login_times(&path).unwrap().contains_key(other));
+        // Steam 日志清空后，成功时间来自便携文件；失败尝试不会产生任何新时间。
+        fs::write(connection_log(root), failure).unwrap();
+        let restarted = accounts_for_root_with_login_times(root, &path).unwrap();
+        assert_eq!(restarted[0].timestamp, expected);
+        assert_eq!(restarted[1].timestamp, 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn corrupt_portable_login_times_are_preserved_and_invalid_entries_are_ignored() {
+        let dir = std::env::temp_dir().join(format!("gameready-login-time-corrupt-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("accounts.json");
+        atomic_json(&path, &serde_json::json!({
+            "version": 2,
+            "accounts": {},
+            "backup": {},
+            "unassigned_login_times": {
+                "invalid": 100,
+                "76561197960265729": -1,
+                "76561197960265730": i64::MAX
+            }
+        })).unwrap();
+        assert!(read_login_times(&path).unwrap().is_empty());
+        fs::write(&path, b"{broken").unwrap();
+        let mut accounts = [to_account(&login_record("76561197960265729", "player", 100))];
+        assert!(merge_login_times(&path, &mut accounts).is_err());
+        assert!(remove_login_time(&path, "76561197960265729").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"{broken");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2890,12 +3167,13 @@ pub fn open_data_dir() -> Result<(), String> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_logs(filter: String) -> Vec<LogEntry> {
+    let _lock = LOG_LOCK.lock().unwrap();
     let mut out: Vec<LogEntry> = Vec::new();
     if let Ok(f) = File::open(logs_path()) {
         for line in BufReader::new(f).lines().map_while(Result::ok) {
             // 单行损坏（如断电截断）跳过，不影响其余条目
             if let Ok(e) = serde_json::from_str::<LogEntry>(&line) {
-                if filter == "all" || filter.is_empty() || e.kind == filter {
+                if log_filter_matches(&filter, &e.kind) {
                     out.push(e);
                 }
             }
@@ -2903,6 +3181,14 @@ pub fn list_logs(filter: String) -> Vec<LogEntry> {
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.ts_ms));
     out
+}
+
+#[tauri::command]
+pub fn clear_logs(filter: String, app: AppHandle) -> Result<usize, String> {
+    let _lock = LOG_LOCK.lock().unwrap();
+    let removed = clear_log_file(&logs_path(), &filter)?;
+    let _ = app.emit("logs-cleared", json!({ "filter": filter }));
+    Ok(removed)
 }
 
 #[tauri::command]

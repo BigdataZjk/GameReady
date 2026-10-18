@@ -34,7 +34,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       window.backupFixture = { snapshot, calls: [], accounts: [], loginResult: null, loginError: null,
         generation: 0, operation: null, status: { paths_valid: {}, steam_running: false, lol_guard_on: false },
         holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
-        failSync: false, failSave: false, clipboardText:null, clipboardSequence:0, emit, publish };
+        failSync: false, failSave: false, clipboardText:null, clipboardSequence:0, emit, publish,
+        logs:[], holdLogs:false, logResolvers:[], updateDownloads:0,
+        update:{current_version:'0.1.16',latest_version:null,available:false,status:'idle',message:'',downloaded_path:null} };
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{
         const f=window.backupFixture;f.copied=value;f.clipboardText=value;f.clipboardSequence++;
       }}});
@@ -69,7 +71,37 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             f.accounts=f.accounts.filter(account=>account.steam_id64!==args.sid64);
             return 'fixture_delete';
           }
-          if(command === 'list_logs') return [];
+          if(command === 'list_logs') {
+            const f=window.backupFixture, logs=clone(f.logs.filter(l=>args.filter==='all'||l.kind===args.filter));
+            if(f.holdLogs) return new Promise(resolve=>f.logResolvers.push(()=>resolve(logs)));
+            return logs;
+          }
+          if(command === 'clear_logs') {
+            const f=window.backupFixture;
+            if(f.failClear) throw new Error('模拟日志文件不可写');
+            const old=f.logs.length;
+            f.logs=f.logs.filter(l=>args.filter!=='all'&&l.kind!==args.filter);
+            emit('logs-cleared',{filter:args.filter});
+            return old-f.logs.length;
+          }
+          if(command === 'update_status') return clone(window.backupFixture.update);
+          if(command === 'check_update') {
+            const f=window.backupFixture;
+            f.update={...f.update,status:'checking',message:'正在检查更新'};emit('update-changed',f.update);
+            await new Promise(resolve=>setTimeout(resolve,40));
+            f.update={...f.update,...(f.updateCheckResult||{status:'idle',available:false,message:'当前已是最新版本'})};
+            emit('update-changed',f.update);return clone(f.update);
+          }
+          if(command === 'download_update') {
+            const f=window.backupFixture;f.updateDownloads++;
+            f.update={...f.update,status:'downloading',message:'正在下载更新'};emit('update-changed',f.update);
+            if(f.holdDownload) await new Promise(resolve=>f.releaseDownload=resolve);
+            else await new Promise(resolve=>setTimeout(resolve,40));
+            f.update={...f.update,status:f.failDownload?'error':'downloaded',
+              message:f.failDownload?'模拟下载失败':'已下载，请退出程序后替换原 EXE，保留 Data',
+              downloaded_path:f.failDownload?null:'D:\\GameReady\\Data\\updates\\GameReady-0.1.17-windows-x64.exe'};
+            emit('update-changed',f.update);return clone(f.update);
+          }
           if(command === 'switch_account' || command === 'login_new') {
             const f = window.backupFixture, generation = ++f.generation;
             const operation = (phase,message) => {
@@ -131,6 +163,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.goto(pathToFileURL(path.resolve(__dirname, '../assets/index.html')).href + '#steam');
     // App startup intentionally selects the first game tab instead of the URL hash.
     await page.locator('#nav-steam').click();
+    await page.waitForFunction(()=>document.querySelector('#page-steam').classList.contains('show'));
     assert.equal(await page.locator('#doLogin').evaluate(button=>button.previousElementSibling.id),'recognizeLogin');
     const parseCases=[
       ['player---Pass!1','player','Pass!1'],['steam_user----------p_a---ss','steam_user','p_a---ss'],
@@ -152,14 +185,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     }
     assert.deepEqual(await page.evaluate(()=>parseLoginClipboard('user____name----pass',['user____name'])),
       {account:'user____name',password:'pass'});
-    assert.equal(await page.locator('#recognizeLogin').isDisabled(),true);
+    assert.equal(await page.locator('#recognizeLogin').isHidden(),true);
     async function fixtureClipboard(text,fail=false){
       await page.evaluate(async ({text,fail})=>{
         const f=window.backupFixture;f.clipboardText=text;f.clipboardSequence++;f.clipboardFail=fail;
-        await refreshLoginClipboard();
+        await refreshLoginClipboard(true);
       },{text,fail});
     }
     await fixtureClipboard('player----first-password');
+    await page.locator('#recognizeLogin').waitFor({state:'visible'});
+    assert.equal(await page.locator('.add-row').evaluate(row=>row.scrollWidth<=row.clientWidth),true);
     assert.equal(await page.locator('#recognizeLogin').isEnabled(),true);
     await page.locator('#recognizeLogin').click();
     await page.waitForFunction(()=>document.querySelector('#fUser').value==='player');
@@ -171,7 +206,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('#fPass').inputValue(),'latest-password');
     await page.evaluate(()=>{const f=window.backupFixture;f.clipboardText='';f.clipboardSequence++;});
     await page.locator('#recognizeLogin').click();
-    await page.waitForFunction(()=>document.querySelector('#recognizeLogin').disabled);
+    await page.waitForFunction(()=>document.querySelector('#recognizeLogin').hidden);
     assert.equal(await page.locator('#fPass').inputValue(),'latest-password','A stale recognized clipboard cannot overwrite the draft');
     await fixtureClipboard('player---old');
     await page.evaluate(()=>{const f=window.backupFixture;f.holdClipboard=true;f.clipboardSequence++;refreshLoginClipboard();});
@@ -183,7 +218,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.waitForFunction(()=>document.querySelector('#fUser').value==='new_player');
     assert.equal(await page.locator('#fPass').inputValue(),'new-password','An older in-flight read cannot win over click-time clipboard data');
     await fixtureClipboard('player---password',true);
-    assert.equal(await page.locator('#recognizeLogin').isDisabled(),true);
+    assert.equal(await page.locator('#recognizeLogin').isHidden(),true);
     await fixtureClipboard('player---password');
     assert.equal(await page.locator('#recognizeLogin').isEnabled(),true);
     await page.screenshot({path:path.resolve(__dirname,'../target/login-recognition-ui.png')});
@@ -426,19 +461,32 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     });
     console.log('PASS recent-login ordering, global native context-menu suppression, scoped copy menus and clipboard results');
     const savedLogin = page.locator('#acctCards .acct').getByRole('button', { name: '登录', exact: true });
+    const savedRow = page.locator('#acctCards .acct[data-sid="76561198000000001"]');
+    async function clickSavedLogin(){ await savedRow.hover(); await savedLogin.click(); }
+    await page.mouse.move(0,0);
+    await page.locator('#fUser').focus();
+    assert.equal(await savedLogin.evaluate(node=>getComputedStyle(node.parentElement).opacity),'0');
+    await savedRow.hover();
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('#acctCards .acct .op')).opacity==='1');
+    assert.equal(await savedLogin.isVisible(),true);
+    await page.mouse.move(0,0);
+    await savedRow.focus();
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('#acctCards .acct .op')).opacity==='1');
+    await page.screenshot({path:path.resolve(__dirname,'../target/account-hover-actions-ui.png')});
+    console.log('PASS account actions hide at rest, slide into view on hover and remain keyboard accessible');
     async function assertLoginFeedback(message, ok) {
       await page.waitForFunction(text => document.querySelector('#tkTxt').textContent === text, message);
       assert.equal(await page.locator('#ticker').getAttribute('class'), 'ticker' + (ok == null ? '' : ok ? ' ok' : ' err'));
       assert.equal(await page.evaluate(() => progTimer), null, 'Completion must stop progress messages');
     }
-    await savedLogin.click();
+    await clickSavedLogin();
     await assertLoginFeedback('已登录 Saved Player，配置覆盖完成', true);
     assert.deepEqual(await page.evaluate(() => window.backupFixture.calls.find(c => c.command === 'switch_account').args),
       { sid64: '76561198000000001' });
     await page.evaluate(() => window.backupFixture.loginResult = {
       name: 'Saved Player', message: '已登录 Saved Player，但配置覆盖失败：模拟写入失败', ok: false
     });
-    await savedLogin.click();
+    await clickSavedLogin();
     await assertLoginFeedback('已登录 Saved Player，但配置覆盖失败：模拟写入失败', false);
     console.log('PASS account-list login displays configuration success/failure and stops progress');
 
@@ -464,13 +512,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     console.log('PASS new-account login preserves password input and displays configuration outcomes');
 
     await page.evaluate(() => window.backupFixture.loginError = 'Steam 启动失败');
-    await savedLogin.click();
+    await clickSavedLogin();
     await assertLoginFeedback('Steam 启动失败', false);
     await page.evaluate(() => {
       const f=window.backupFixture; f.loginError=null;
       f.loginResult={name:'Saved Player',message:'请在 Steam 完成验证，随后自动应用配置',ok:true,pending:true};
     });
-    await savedLogin.click();
+    await clickSavedLogin();
     await assertLoginFeedback('请在 Steam 完成验证，随后自动应用配置', null);
     assert.equal(await page.evaluate(() => toastTimer),null,'Waiting feedback has no fade-out timer');
     await page.evaluate(async () => {
@@ -521,7 +569,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       f.loginResult={name:'Saved Player',message:'迟到的等待结果',ok:true,pending:true};
       f.earlyFinal={message:'最终确认已先到达',ok:true};
     });
-    await savedLogin.click();
+    await clickSavedLogin();
     await assertLoginFeedback('最终确认已先到达',true);
     await page.evaluate(() => {
       const f=window.backupFixture; f.earlyFinal=null;
@@ -636,6 +684,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await refreshAccounts();
     });
     const deletedCard=page.locator('#acctCards .acct[data-sid="76561198000000009"]');
+    await deletedCard.hover();
     await deletedCard.getByRole('button',{name:'删除',exact:true}).click();
     await page.waitForFunction(()=>window.backupFixture.calls.some(c=>c.command==='delete_account'));
     assert.equal(await page.locator('.modal-mask.show').count(),0,'Delete must execute without a confirmation dialog');
@@ -644,6 +693,113 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       [{sid64:'76561198000000009'}]);
     assert.match(await page.locator('#tkTxt').textContent(),/已删除 fixture_delete/);
     console.log('PASS account deletion executes once directly and refreshes the list without confirmation');
+
+    const dialogs=[];
+    page.on('dialog',async dialog=>{dialogs.push(dialog.message());await dialog.dismiss();});
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.logs=['lol','steam','acct','lol'].map((kind,index)=>({kind,ts_ms:Date.now()-index*1000,title:kind+' fixture '+index,detail:'',ok:true}));
+      state.logsDirty=true;
+    });
+    await page.locator('#nav-logs').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===4);
+    await page.locator('#chips [data-f="lol"]').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===2);
+    await page.locator('#clearLogs').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===0);
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.logs.map(l=>l.kind)),['steam','acct']);
+    for(const kind of ['steam','acct']) {
+      await page.locator(`#chips [data-f="${kind}"]`).click();
+      await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===1);
+      await page.locator('#clearLogs').click();
+      await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===0);
+    }
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='clear_logs').map(c=>c.args.filter)),['lol','steam','acct']);
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.logs=['lol','steam','acct'].map(kind=>({kind,ts_ms:Date.now(),title:kind+' remaining',detail:'',ok:true}));
+    });
+    await page.locator('#chips [data-f="all"]').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===3);
+    await page.evaluate(()=>{window.backupFixture.holdLogs=true;loadLogs();});
+    await page.waitForFunction(()=>window.backupFixture.logResolvers.length===1);
+    await page.evaluate(()=>window.backupFixture.holdLogs=false);
+    await page.locator('#clearLogs').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===0);
+    await page.evaluate(()=>window.backupFixture.logResolvers.shift()());
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator('#list .entry').count(),0,'An old list response cannot resurrect cleared records');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.logs),[]);
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='clear_logs').at(-1).args.filter),'all');
+    assert.deepEqual(dialogs,[],'Log cleanup must execute without confirmation');
+
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.logs=[{kind:'lol',ts_ms:Date.now(),title:'new after clear',detail:'',ok:true}];
+      f.emit('log-appended',f.logs[0]);
+    });
+    await page.waitForFunction(()=>document.querySelectorAll('#list .entry').length===1);
+    await page.evaluate(()=>window.backupFixture.failClear=true);
+    await page.locator('#clearLogs').click();
+    await page.waitForFunction(()=>document.querySelector('#tkTxt').textContent.includes('日志清理失败'));
+    assert.equal(await page.locator('#list .entry').count(),1);
+    await page.evaluate(()=>window.backupFixture.failClear=false);
+    await page.screenshot({path:path.resolve(__dirname,'../target/log-clear-ui.png')});
+    console.log('PASS log cleanup respects each displayed category, all clears all, no confirmation, stale-read protection and truthful failures');
+
+    await page.evaluate(()=>location.hash='about');
+    await page.waitForFunction(()=>document.querySelector('#page-about').classList.contains('show'));
+    assert.equal(await page.locator('#titleUpdateBadge').isHidden(),true);
+    await page.locator('#upBtn').click();
+    await page.waitForFunction(()=>document.querySelector('#upBtnLabel').textContent==='检查更新');
+    assert.match(await page.locator('#updateStatus').textContent(),/当前已是最新版本/);
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.updateCheckResult={available:true,latest_version:'0.1.17',status:'available',message:'发现新版本'};
+    });
+    await page.locator('#upBtn').click();
+    await page.waitForFunction(()=>!document.querySelector('#titleUpdateBadge').hidden);
+    assert.match(await page.locator('#titleUpdateBadge').textContent(),/v0\.1\.17/);
+    assert.match(await page.locator('#aboutUpdateBadge').textContent(),/v0\.1\.17/);
+    assert.equal(await page.locator('.titlebar').evaluate(node=>node.scrollWidth<=node.clientWidth),true);
+    await page.locator('#nav-steam').click();
+    assert.equal(await page.locator('#titleUpdateBadge').isVisible(),true,'Update hint survives tab navigation');
+    await page.evaluate(()=>{const f=window.backupFixture;f.failDownload=true;});
+    await page.locator('#titleUpdateBadge').click();
+    await page.waitForFunction(()=>document.querySelector('#updateStatus').dataset.state==='error');
+    assert.equal(await page.locator('#titleUpdateBadge').isVisible(),true,'Download error retains discovered version');
+    assert.equal(await page.locator('#titleUpdateBadge').isEnabled(),true);
+    await page.evaluate(()=>{const f=window.backupFixture;f.failDownload=false;f.holdDownload=true;});
+    await page.locator('#titleUpdateBadge').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseDownload==='function');
+    assert.equal(await page.locator('#titleUpdateBadge').isDisabled(),true);
+    assert.equal(await page.locator('#upBtn').isDisabled(),true);
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdDownload=false;f.releaseDownload();});
+    await page.waitForFunction(()=>document.querySelector('#updateStatus').dataset.state==='downloaded');
+    assert.equal(await page.locator('#titleUpdateBadge').isVisible(),true);
+    assert.match(await page.locator('#updateStatus').textContent(),/Data\\updates/);
+    assert.equal(await page.evaluate(()=>window.backupFixture.updateDownloads),2);
+    await page.evaluate(()=>location.hash='about');
+    await page.waitForFunction(()=>document.querySelector('#page-about').classList.contains('show'));
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('#page-about')).opacity==='1');
+    await page.screenshot({path:path.resolve(__dirname,'../target/update-available-ui.png')});
+    console.log('PASS current/latest comparison UI, persistent version badges, explicit download, busy state, failure retry and saved-file feedback');
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.update={...f.update,message:'EXE 已下载；打开所在文件夹失败：模拟资源管理器不可用'};
+      f.emit('update-changed',f.update);
+    });
+    assert.match(await page.locator('#updateStatus').textContent(),/打开所在文件夹失败/);
+    assert.match(await page.locator('#updateStatus').textContent(),/Data\\updates/);
+    await page.evaluate(()=>{
+      const ids=[...document.querySelector('.rail').children].map(node=>node.id).filter(Boolean);
+      localStorage.setItem('gr_nav_order',JSON.stringify(['nav-logs',...ids.filter(id=>id!=='nav-logs')]));
+    });
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('#page-logs').classList.contains('show'));
+    await page.waitForFunction(()=>window.backupFixture.calls.some(call=>call.command==='list_logs'));
+    assert.equal(await page.locator('#list .entry').count(),0);
+    console.log('PASS folder-open failures remain visible and a saved Logs-first navigation starts without initialization errors');
     assert.deepEqual(errors, []);
     console.log('PASS no JavaScript runtime errors (480 x 660 viewport)');
   } finally {
