@@ -288,6 +288,20 @@ pub fn login_backup_note(account: &str, password: Option<&str>) -> Option<String
 
 pub fn credentials_changed() -> Result<()> { edit(|_| Ok(())) }
 
+/// 和备份快照写回串行删除，且使正在上传的旧批次失效，防止回执重新创建已删账号。
+pub fn remove_local_account(account: &str) -> Result<()> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let path = crate::creds_path();
+    {
+        let _times = crate::LOGIN_TIMES_OP.lock().unwrap_or_else(|p| p.into_inner());
+        crate::account_store::remove_account(&path, account)
+            .map_err(|message| error("local_error", &message, false))?;
+    }
+    let store = read_store(&path)?;
+    publish(&store);
+    Ok(())
+}
+
 fn same_connection(a: &Config, b: &Config) -> bool {
     a.host == b.host && a.port == b.port && a.username == b.username
         && a.password == b.password && a.remote_path == b.remote_path

@@ -843,6 +843,7 @@ function render(){
   $('nav-settings').classList.toggle('active', p==='settings');
   $('nav-about').classList.toggle('active', p==='about');
   if(p==='logs') ensureLogs();
+  if(p==='steam') refreshAccounts();
 }
 /* ---------- 左侧导航长按拖拽排序（2026-09-29，手机式交互） ----------
    按住 400ms 进入拖拽：ghost 跟随指针、其余图标 FLIP 动画实时腾位，可跨中部分隔线；
@@ -1113,24 +1114,32 @@ $('globalToggle').addEventListener('click', function(){
 });
 
 /* ---------- Steam 账号面板（重构：内嵌大按钮下方；R6 完全清理 / R7 昵称(账号名)） ---------- */
-let acctBusy=false, acctStale=false, switchBusy=false, loginBusy=false;
+let acctBusy=false, acctStale=false, acctStaleSilent=true, acctReadError='', switchBusy=false, loginBusy=false;
 let steamGeneration=0, steamRequestGeneration=0, loginFinalGeneration=-1, steamOperation=null, loginDraft=null;
 function steamBusy(){
   return switchBusy || loginBusy || delBusy || coverBusy ||
     !!(steamOperation && ['requesting','stopping','applying','starting','restoring'].includes(steamOperation.phase));
 }
-function accountLoginPending(sid64){
-  return steamOperation?.sid64 === String(sid64) && steamOperation.phase !== 'idle' && !delBusy && !coverBusy;
+function accountKey(account){ return String(account.account_name || '').toLowerCase(); }
+function accountOperationTarget(account){
+  if(!steamOperation) return false;
+  if(typeof account==='object' && steamOperation.account_name)
+    return accountKey(account)===String(steamOperation.account_name).toLowerCase();
+  const sid64=typeof account==='object'?account.steam_id64:account;
+  return !!sid64 && steamOperation.sid64===String(sid64);
+}
+function accountLoginPending(account){
+  return accountOperationTarget(account) && steamOperation.phase !== 'idle' && !delBusy && !coverBusy;
 }
 function acceptSteamGeneration(generation){
   if(!Number.isFinite(generation) || generation < Math.max(steamGeneration,steamRequestGeneration)) return false;
   steamGeneration = generation;
   return true;
 }
-function beginSteamOperation(message,sid64=null){
+function beginSteamOperation(message,sid64=null,account_name=null){
   statusRequest++;
   steamRequestGeneration = steamGeneration + 1;
-  steamOperation = {generation:steamRequestGeneration,phase:'requesting',message,sid64};
+  steamOperation = {generation:steamRequestGeneration,phase:'requesting',message,sid64,account_name};
   toast(message,null,true);
   progStart(s=>message+'（已等待 '+s+'s）');
   renderAccountsPage();
@@ -1159,7 +1168,8 @@ function loginFinished(result){
   if(!result || !acceptSteamGeneration(result.generation) || result.generation === loginFinalGeneration) return;
   if(result.pending){
     if(steamOperation?.phase === 'requesting' || !steamOperation)
-      applySteamOperation({generation:result.generation,phase:'waiting',message:result.message,sid64:steamOperation?.sid64 || null});
+      applySteamOperation({generation:result.generation,phase:'waiting',message:result.message,sid64:steamOperation?.sid64 || null,
+        account_name:steamOperation?.account_name || null});
     return;
   }
   loginFinalGeneration = result.generation;
@@ -1182,36 +1192,50 @@ function computeCurrentAccount(){
   const arr = Array.isArray(state.accounts) ? state.accounts : [];
   return arr.find(a=>a.steam_id64 && a.steam_id64===state.currentSid64) || null;
 }
-async function refreshAccounts(){
+async function refreshAccounts(silent=false){
   if(!hasTauri){ state.accounts = []; renderAccountsPage(); return; }
-  if(acctBusy){ acctStale = true; return; }
+  if(acctBusy){ acctStale = true; acctStaleSilent = acctStaleSilent && silent; return; }
   acctBusy = true;
   try{
     const list = await invoke('accounts_list');
-    closeAccountMenu();
-    state.accounts = Array.isArray(list) ? list : [];
-    clipboardSequence=null;refreshLoginClipboard();
-    renderAccountsPage();
+    const accounts=Array.isArray(list) ? list : [];
+    acctReadError='';
+    // 周期重读 Data 时保留未改变的行、键盘焦点和菜单，避免打断点击。
+    if(JSON.stringify(accounts)!==JSON.stringify(state.accounts)){
+      closeAccountMenu();
+      state.accounts = accounts;
+      clipboardSequence=null;refreshLoginClipboard();
+      renderAccountsPage();
+    }
   }catch(e){
-    toast('账号列表读取失败：'+errText(e), 'err');
+    const message='账号列表读取失败：'+errText(e);
+    if(!silent || message!==acctReadError) toast(message, 'err');
+    acctReadError=message;
   }finally{
     acctBusy = false;
-    if(acctStale){ acctStale = false; refreshAccounts(); }
+    if(acctStale){ const silent=acctStaleSilent; acctStale = false; acctStaleSilent=true; refreshAccounts(silent); }
   }
 }
+function refreshVisibleAccounts(){
+  if(hasTauri && curPage()==='steam' && document.visibilityState==='visible') refreshAccounts(true);
+}
+window.addEventListener('focus',refreshVisibleAccounts);
+document.addEventListener('visibilitychange',refreshVisibleAccounts);
+if(hasTauri) setInterval(refreshVisibleAccounts,2000);
 /* 页内账号卡片：操作在悬停或键盘聚焦时滑出，处理中的账号在副标题显示进度。 */
 function accountCard(a, cur){
   const isCur = a === cur;
-  const target = steamOperation?.sid64 === String(a.steam_id64), busy = steamBusy();
-  const loggingIn = accountLoginPending(a.steam_id64);
+  const target = accountOperationTarget(a), busy = steamBusy();
+  const loggingIn = accountLoginPending(a);
   const card = el('div', 'acct'+(isCur?' cur':''));
   card.dataset.sid = String(a.steam_id64);
+  card.dataset.account = accountKey(a);
   card.tabIndex = 0;
-  const av = el('div', 'avatar', firstChar(a.persona_name));
+  const av = el('div', 'avatar', firstChar(a.persona_name || a.account_name));
   if(isCur) av.appendChild(el('span','live'));
   const info = el('div','acct-info');
   const nm = el('div','acct-name');
-  nm.appendChild(el('span', null, a.persona_name || ''));
+  nm.appendChild(el('span', null, a.persona_name || a.account_name || ''));
   nm.appendChild(el('span', 'an', '('+(a.account_name||'')+')'));
   info.appendChild(nm);
   info.appendChild(el('div','acct-sub', target && steamOperation.phase === 'waiting' ? '等待 Steam 登录确认' : isCur ? ('当前登录 · 上次 '+fmtAcctTsShort(a.timestamp)) : fmtAcctTs(a.timestamp)));
@@ -1252,7 +1276,7 @@ let accountMenuTarget = null;
 function closeAccountMenu(restoreFocus=false){
   $('accountMenu').hidden=true;
   if(restoreFocus && accountMenuTarget){
-    const card=[...$('acctCards').children].find(row=>row.dataset.sid===String(accountMenuTarget.steam_id64));
+    const card=[...$('acctCards').children].find(row=>row.dataset.account===accountKey(accountMenuTarget));
     card?.focus();
   }
   accountMenuTarget=null;
@@ -1262,7 +1286,7 @@ document.addEventListener('contextmenu',e=>{
   closeAccountMenu();
   const card=e.target.closest('#acctCards .acct');
   if(!card) return;
-  const account=state.accounts?.find(a=>String(a.steam_id64)===card.dataset.sid);
+  const account=state.accounts?.find(a=>accountKey(a)===card.dataset.account);
   if(!account) return;
   accountMenuTarget=account;
   const menu=$('accountMenu'), rect=card.getBoundingClientRect();
@@ -1289,7 +1313,7 @@ $('accountMenu').addEventListener('click',async e=>{
   const password=button.dataset.copy==='password';
   closeAccountMenu();
   try{
-    const value=password?await invoke('account_password',{sid64:String(account.steam_id64)}):account.account_name;
+    const value=password?await invoke('account_password',{sid64:String(account.steam_id64 || ''),accountName:account.account_name}):account.account_name;
     try{ await navigator.clipboard.writeText(value); }
     catch(_){
       const input=el('textarea'); input.value=value; input.style.cssText='position:fixed;left:-9999px';
@@ -1301,12 +1325,12 @@ $('accountMenu').addEventListener('click',async e=>{
   }catch(error){toast(errText(error),'err');}
 });
 async function doSwitch(a){
-  if(steamBusy() || accountLoginPending(a.steam_id64)) return;
+  if(steamBusy() || accountLoginPending(a)) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   switchBusy = true;
-  beginSteamOperation('正在登录并应用配置 '+displayName(a)+'…',String(a.steam_id64));
+  beginSteamOperation('正在登录并应用配置 '+displayName(a)+'…',String(a.steam_id64 || ''),a.account_name);
   try{
-    loginFinished(await invoke('switch_account', { sid64: String(a.steam_id64) }));
+    loginFinished(await invoke('switch_account', { sid64: String(a.steam_id64 || ''), accountName:a.account_name }));
   }catch(e){ toast(errText(e), 'err'); }
   finally{ switchBusy = false; endSteamRequest(); }
   refreshAccounts();   // 后端 steam-accounts-changed 事件也会触发一次刷新，此处幂等
@@ -1317,10 +1341,10 @@ async function doDelete(a){
   if(steamBusy()) return;
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   delBusy = true;
-  const sid = String(a.steam_id64);
-  beginSteamOperation('正在删除本机账号 '+displayName(a)+'…',sid);
+  const sid = String(a.steam_id64 || '');
+  beginSteamOperation('正在删除本机账号 '+displayName(a)+'…',sid,a.account_name);
   try{
-    const name = await invoke('delete_account', { sid64: sid });
+    const name = await invoke('delete_account', { sid64: sid, accountName:a.account_name });
     if(state.currentSid64 === a.steam_id64) state.currentSid64 = null;   // 删的是当前账号
     toast('已删除 '+(name || displayName(a)), 'ok');
   }catch(e){ toast('删除失败：'+errText(e), 'err'); }
@@ -1427,7 +1451,7 @@ $('doLogin').addEventListener('click', async ()=>{
   if(steamBusy()) return;
   if(!hasTauri){ toast(NO_TAURI_MSG,'err'); return; }
   loginBusy = true;
-  loginDraft = {generation:beginSteamOperation('正在登录并应用配置 '+u+'…'),user:u,password:p};
+  loginDraft = {generation:beginSteamOperation('正在登录并应用配置 '+u+'…',null,u),user:u,password:p};
   try{
     loginFinished(await invoke('login_new', { account: u, password: p }));   // 后端确认登录并完成配置覆盖
     refreshAccounts();

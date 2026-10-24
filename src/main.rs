@@ -419,10 +419,8 @@ pub struct LogEntry {
 /// exe 同级 Data\ 目录（不存在则创建）；Lazy 缓存，进程内只解析一次
 pub fn data_dir() -> PathBuf {
     static DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-        let base = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .unwrap_or_else(|| PathBuf::from("."));
+        let exe = std::env::current_exe().expect("无法定位程序，不能确定同级 Data 目录");
+        let base = exe.parent().expect("程序路径没有父目录");
         let dir = base.join("Data");
         // 创建失败（只读盘等罕见情况）不 panic，保留路径让上层 IO 自然报错
         let _ = std::fs::create_dir_all(&dir);
@@ -1183,6 +1181,7 @@ fn read_login_times(path: &Path) -> Result<std::collections::BTreeMap<String, i6
 }
 
 /// 合并只用于列表展示；登录确认始终读取 Steam 原始记录，不能用缓存确认新尝试。
+#[cfg(test)]
 fn merge_login_times(path: &Path, accounts: &mut [SteamAccount]) -> Result<(), String> {
     let values = accounts.iter().filter(|a| sid64_to_sid3(&a.steam_id64).is_some())
         .map(|a| (a.steam_id64.clone(), a.account_name.clone(),
@@ -1194,11 +1193,12 @@ fn merge_login_times(path: &Path, accounts: &mut [SteamAccount]) -> Result<(), S
 
 fn persist_confirmed_login(account: &SteamAccount) {
     let _times_op = LOGIN_TIMES_OP.lock().unwrap();
-    if let Err(error) = merge_login_times(&login_times_path(), &mut [account.clone()]) {
+    if let Err(error) = account_store::merge_account_profiles(&login_times_path(), &[account.clone()]) {
         log("acct", "保存最近登录时间失败", &error, false);
     }
 }
 
+#[cfg(test)]
 fn remove_login_time(path: &Path, sid64: &str) -> Result<(), String> {
     account_store::remove_login_time(path, sid64)
 }
@@ -1287,6 +1287,7 @@ fn session_account(root: &str, sid64: &str, history: &[RawAccount]) -> Result<Op
         auto_login: false, timestamp: sid64_to_sid3(sid64).and_then(|sid| read_login_success(root, &sid, 0, 0)).unwrap_or(0) }))
 }
 
+#[cfg(test)]
 fn accounts_for_root(root: &str) -> Result<Vec<SteamAccount>, String> {
     // 与删除后的 VDF 写入/时间清理共用锁，避免旧列表回写已删除账号的时间。
     let _times_op = LOGIN_TIMES_OP.lock().unwrap();
@@ -1294,6 +1295,22 @@ fn accounts_for_root(root: &str) -> Result<Vec<SteamAccount>, String> {
 }
 
 fn accounts_for_root_with_login_times(root: &str, times_path: &Path) -> Result<Vec<SteamAccount>, String> {
+    // Data 是账号目录；先校验，不能被本机 Steam 的空历史或坏文件替代。
+    let saved = account_store::read_accounts(times_path)?;
+    match local_accounts_for_root(root) {
+        Ok(accounts) => {
+            account_store::merge_account_profiles(times_path, &accounts)?;
+            let mut accounts = account_store::read_accounts(times_path)?;
+            accounts.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| a.account_name.cmp(&b.account_name)));
+            Ok(accounts)
+        }
+        Err(_) if !saved.is_empty() => Ok(saved),
+        Err(error) => Err(error),
+    }
+}
+
+/// 本机历史只补充账号资料；登录确认仍只使用 Steam 本次会话的原始证据。
+fn local_accounts_for_root(root: &str) -> Result<Vec<SteamAccount>, String> {
     let history = login_history(root)?;
     let mut accounts: Vec<_> = history.iter().map(to_account).collect();
     if let Some(sid3) = active_steam_sid3(root) {
@@ -1312,8 +1329,33 @@ fn accounts_for_root_with_login_times(root: &str, times_path: &Path) -> Result<V
                 .filter(|timestamp| valid_login_timestamp(*timestamp)).unwrap_or(0));
         }
     }
-    merge_login_times(times_path, &mut accounts)?;
     Ok(accounts)
+}
+
+fn portable_accounts() -> Result<Vec<SteamAccount>, String> {
+    let _times_op = LOGIN_TIMES_OP.lock().unwrap();
+    portable_accounts_at(steam_root_or_err().ok().as_deref(), &creds_path())
+}
+
+fn portable_accounts_at(root: Option<&str>, path: &Path) -> Result<Vec<SteamAccount>, String> {
+    match root {
+        Some(root) => accounts_for_root_with_login_times(root, path),
+        None => account_store::read_accounts(path),
+    }
+}
+
+fn select_portable_account(accounts: &[SteamAccount], sid64: &str, name: Option<&str>) -> Result<SteamAccount, String> {
+    let name = name.filter(|name| !name.is_empty());
+    let matches: Vec<_> = accounts.iter().filter(|account| match name {
+        Some(name) => account.account_name.eq_ignore_ascii_case(name),
+        None => !sid64.is_empty() && account.steam_id64 == sid64,
+    }).collect();
+    if matches.len() != 1 { return Err("账号不存在或记录不唯一，请刷新列表后重试".into()); }
+    let account = matches[0];
+    if !sid64.is_empty() && !account.steam_id64.is_empty() && account.steam_id64 != sid64 {
+        return Err("账号资料已改变，请刷新列表后重试".into());
+    }
+    Ok(account.clone())
 }
 
 /// 仅在已确认会话且 Steam 完全退出后补齐缺失历史，保留其他账号与未知字段。
@@ -1332,8 +1374,8 @@ fn retain_session_account(root: &str, account: &SteamAccount) -> Result<Vec<RawA
 /// 写注册表 HKCU\Software\Valve\Steam 的 AutoLoginUser = account（REG_SZ）
 fn registry_set_autologin_user(account: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hkcu
-        .open_subkey_with_flags("Software\\Valve\\Steam", KEY_SET_VALUE)
+    let (key, _) = hkcu
+        .create_subkey("Software\\Valve\\Steam")
         .map_err(|e| format!("打开注册表 Valve\\Steam 失败: {e}"))?;
     key.set_value("AutoLoginUser", &account)
         .map_err(|e| format!("写入注册表 AutoLoginUser 失败: {e}"))
@@ -1527,13 +1569,9 @@ fn get_cred(account: &str) -> Option<String> {
 
 // ---------------- 核心功能（合同 pub API） ----------------
 
-/// 解析 <steam_root>\config\loginusers.vdf 输出账号列表；根目录未设置/文件不存在返回空列表
+/// Data 账号目录，辅以本机 Steam 资料；不要求本机已安装或登录 Steam。
 pub fn accounts_list_v() -> Vec<SteamAccount> {
-    let root = match steam_root_or_err() {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-    accounts_for_root(&root).unwrap_or_default()
+    portable_accounts().unwrap_or_default()
 }
 
 /// AutoLoginUser 只是预选项；活动账号必须属于该安装目录的真实 Steam 进程。
@@ -1545,12 +1583,21 @@ pub struct SteamProgress {
     pub phase: String,
     pub message: String,
     pub sid64: Option<String>,
+    #[serde(default)]
+    pub account_name: Option<String>,
 }
 static STEAM_PROGRESS: Mutex<Option<SteamProgress>> = Mutex::new(None);
 
 fn steam_progress(app: &AppHandle, generation: u64, phase: &str, message: &str, sid64: Option<&str>) {
+    let name = STEAM_PROGRESS.lock().unwrap().as_ref()
+        .filter(|progress| progress.generation == generation).and_then(|progress| progress.account_name.clone());
+    steam_progress_named(app, generation, phase, message, sid64, name.as_deref());
+}
+
+fn steam_progress_named(app: &AppHandle, generation: u64, phase: &str, message: &str, sid64: Option<&str>, name: Option<&str>) {
     if STEAM_GENERATION.load(Ordering::SeqCst) != generation { return; }
-    let progress = SteamProgress { generation, phase: phase.into(), message: message.into(), sid64: sid64.map(str::to_string) };
+    let progress = SteamProgress { generation, phase: phase.into(), message: message.into(), sid64: sid64.map(str::to_string),
+        account_name: name.filter(|name| !name.is_empty()).map(str::to_string) };
     *STEAM_PROGRESS.lock().unwrap() = Some(progress.clone());
     let _ = app.emit("steam-operation", progress);
 }
@@ -1657,7 +1704,7 @@ impl LoginAttempt {
 fn start_login(sid64: Option<String>, account: String, password: Option<String>, app: AppHandle) -> Result<LoginResult, String> {
     let _steam_op = STEAM_OP.try_lock().map_err(|_| "Steam 正在应用操作，请稍候重试")?;
     let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    steam_progress(&app, generation, "starting", "正在准备 Steam 登录", sid64.as_deref());
+    steam_progress_named(&app, generation, "starting", "正在准备 Steam 登录", sid64.as_deref(), Some(account.trim()));
     let result = (|| {
         let root = steam_root_or_err()?;
         let history = login_history(&root)?;
@@ -1675,8 +1722,17 @@ fn start_login(sid64: Option<String>, account: String, password: Option<String>,
                 saved
             },
         };
+        if password.as_ref().is_some_and(|password| password.is_empty() || password.contains(['\r', '\n', '\0'])) {
+            return Err("Data 中此账号的密码为空或含换行，请先补充有效密码".into());
+        }
+        if known.is_none() && password.is_none() {
+            return Err("此账号在本机没有 Steam 登录记录，且 Data 中未保存可用密码，请先补充密码".into());
+        }
+        let saved = account_store::read_accounts(&creds_path())?.into_iter()
+            .find(|saved| saved.account_name.eq_ignore_ascii_case(&account));
         let mut attempt = LoginAttempt { generation, root, account, password,
-            sid64: known.map(|a| a.steam_id64), baseline: 0, history: Vec::new(), log_offset: 0, log_since: 0,
+            sid64: known.or(saved).map(|a| a.steam_id64).filter(|sid| !sid.is_empty()),
+            baseline: 0, history: Vec::new(), log_offset: 0, log_since: 0,
             include_global: load_settings().global_cover_on,
             cover: None, restoring: false, started: Instant::now() };
         let previous = active_steam_sid3(&attempt.root).and_then(|sid| sid3_to_id64(&sid))
@@ -1688,7 +1744,7 @@ fn start_login(sid64: Option<String>, account: String, password: Option<String>,
             // 优雅退出后重新读取，保留 Steam 刚刚回写的字段和时间戳。
             let mut history = login_history(&attempt.root)?;
             attempt.history = history.iter().map(to_account).map(|a| (a.steam_id64, a.timestamp)).collect();
-            if let Some(target) = find_login_target(&history, attempt.sid64.as_deref(), &attempt.account)? {
+            if let Some(target) = find_login_target(&history, None, &attempt.account)? {
                 attempt.baseline = target.timestamp;
                 attempt.sid64 = Some(target.steam_id64.clone());
                 select_login_account(&attempt.root, &mut history, &target.steam_id64)?;
@@ -1852,19 +1908,28 @@ fn finish_login(attempt: &LoginAttempt, mut result: LoginResult, app: &AppHandle
 }
 
 /// 只清理本机账号与 userdata；强杀避免退出回写复活账号，必要时恢复原会话。
-fn delete_locked(sid64: &str) -> Result<String, String> {
-    let root = steam_root_or_err()?;
+fn delete_locked(sid64: &str, name: Option<&str>) -> Result<String, String> {
+    let selected = select_portable_account(&portable_accounts()?, sid64, name)?;
+    let root = steam_root_or_err().ok();
+    let mut accounts = match &root { Some(root) => login_history(root)?, None => Vec::new() };
+    let matching: Vec<_> = accounts.iter().enumerate().filter(|(_, account)| field(account, "AccountName")
+        .is_some_and(|name| name.eq_ignore_ascii_case(&selected.account_name))).map(|(index, _)| index).collect();
+    if matching.len() > 1 { return Err("Steam 账号记录重复，请检查 loginusers.vdf 后重试".into()); }
+    let index = matching.first().copied();
+    let active = root.as_deref().and_then(active_steam_sid3).and_then(|sid| sid3_to_id64(&sid));
+    // 便携账号未在本机登录过时，仅清理 Data，不要求 Steam 路径，也不打断其他会话。
+    if index.is_none() && active.as_deref() != Some(selected.steam_id64.as_str()) {
+        backup::remove_local_account(&selected.account_name).map_err(|e| e.message)?;
+        return Ok(display_name(&selected.persona_name, &selected.account_name));
+    }
+    let root = root.expect("本机账号记录有对应 Steam 目录");
     // 杀 Steam 前锁定当前账号名（Steam 退出过程会临时清掉注册表 AutoLoginUser），
     // 重启用它凭据直登恢复会话；被删的若是它则凭据已删，自然退化为无参启动
     let autologin_before = registry_autologin_user().unwrap_or_default();
-    let mut accounts = read_vdf(&root)?;
-    let idx = accounts
-        .iter()
-        .position(|a| a.sid64 == sid64)
-        .ok_or_else(|| "账号不存在，请刷新账号列表".to_string())?;
-    let removed = accounts.remove(idx);
-    let account_name = field(&removed, "AccountName").unwrap_or("").to_string();
-    let persona_name = field(&removed, "PersonaName").unwrap_or("").to_string();
+    let removed = index.map(|index| to_account(&accounts.remove(index))).unwrap_or(selected);
+    let sid64 = removed.steam_id64.as_str();
+    let account_name = removed.account_name.clone();
+    let persona_name = removed.persona_name.clone();
     if account_name.is_empty() {
         return Err("该账号缺少 AccountName 字段，loginusers.vdf 可能已损坏".to_string());
     }
@@ -1875,16 +1940,16 @@ fn delete_locked(sid64: &str) -> Result<String, String> {
     let mut cleanup_errors = Vec::new();
     {
         let _times_op = LOGIN_TIMES_OP.lock().unwrap();
-        if let Err(e) = write_vdf(&root, &accounts) {
+        let write = if index.is_some() || vdf_path(&root).exists() { write_vdf(&root, &accounts) } else { Ok(()) };
+        if let Err(e) = write {
             if was_running {
                 if let Err(recovery) = relaunch_with_cred(&root, &autologin_before) { log("steam", "恢复 Steam 失败", &recovery, false); }
             }
             return Err(e);
         }
-        if let Err(e) = remove_login_time(&login_times_path(), sid64) { cleanup_errors.push(e); }
     }
-    // 同步删除保存的登录凭据（完全清理的一部分）
-    if let Err(e) = remove_cred_by_name(&account_name) { cleanup_errors.push(e); }
+    // 删除整个便携记录（含密码、回执和队列），避免下次按 Data 加载时重新出现。
+    if let Err(e) = backup::remove_local_account(&account_name) { cleanup_errors.push(e.message); }
     // 删除该账号的 userdata 目录（含 localconfig.vdf 等）；不存在或删除失败不阻断流程
     if let Some(sid3) = sid64_to_sid3(sid64) {
         let ud = Path::new(&root).join("userdata").join(&sid3);
@@ -3063,6 +3128,72 @@ mod regression_tests {
     }
 
     #[test]
+    fn portable_accounts_follow_copied_data_without_steam_and_reload_external_changes() {
+        let dir = std::env::temp_dir().join(format!("gameready-portable-list-test-{}", uuid::Uuid::new_v4()));
+        let first = dir.join("original").join("Data");
+        let moved = dir.join("new-machine").join("Data");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&moved).unwrap();
+        let original = first.join("accounts.json");
+        let path = moved.join("accounts.json");
+        let document = serde_json::json!({"version":2,"accounts":{
+            "saved_player":{"password":"fixture-secret","steam_id64":"76561197960265729","last_login":100},
+            "name_only":{"password":"fixture-other"},"missing_password":{}
+        },"backup":{}});
+        atomic_json(&original, &document).unwrap();
+        fs::copy(&original, &path).unwrap();
+        let accounts = portable_accounts_at(None, &path).unwrap();
+        assert_eq!(accounts.len(), 3);
+        assert_eq!(select_portable_account(&accounts, "", Some("NAME_ONLY")).unwrap().steam_id64, "");
+        assert!(!serde_json::to_string(&accounts).unwrap().contains("fixture-secret"));
+        let empty_steam = dir.join("fresh-steam");
+        fs::create_dir_all(empty_steam.join("config")).unwrap();
+        assert_eq!(portable_accounts_at(Some(empty_steam.to_str().unwrap()), &path).unwrap().len(), 3);
+        // 本机坏历史也不能遮掉 Data 目录；读取列表不修写本机 Steam 文件。
+        fs::write(empty_steam.join("config/loginusers.vdf"), b"{broken").unwrap();
+        assert_eq!(portable_accounts_at(Some(empty_steam.to_str().unwrap()), &path).unwrap().len(), 3);
+        assert_eq!(fs::read(empty_steam.join("config/loginusers.vdf")).unwrap(), b"{broken");
+        atomic_json(&path, &serde_json::json!({"version":2,"accounts":{"replacement":{}},"backup":{}})).unwrap();
+        let changed = portable_accounts_at(None, &path).unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].account_name, "replacement");
+        assert_eq!(account_store::read_accounts(&original).unwrap().len(), 3);
+        fs::write(&path, b"{broken-data").unwrap();
+        assert!(portable_accounts_at(None, &path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"{broken-data");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn portable_accounts_merge_local_details_without_hiding_saved_accounts() {
+        let dir = std::env::temp_dir().join(format!("gameready-portable-merge-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("config")).unwrap();
+        let path = dir.join("accounts.json");
+        atomic_json(&path, &serde_json::json!({"version":2,"accounts":{
+            "Player":{"password":"fixture-secret","steam_id64":"76561197960265729","last_login":100},
+            "portable_only":{"password":"fixture-other","steam_id64":"76561197960265731","last_login":80}
+        },"backup":{}})).unwrap();
+        let mut player = login_record("76561197960265729", "PLAYER", 0);
+        player.set("PersonaName", "Local nickname");
+        write_vdf(dir.to_str().unwrap(), &[player, login_record("76561197960265730", "local_only", 120)]).unwrap();
+        let accounts = portable_accounts_at(Some(dir.to_str().unwrap()), &path).unwrap();
+        assert_eq!(accounts.len(), 3);
+        let player = select_portable_account(&accounts, "76561197960265729", Some("player")).unwrap();
+        assert_eq!(player.persona_name, "Local nickname");
+        assert_eq!(player.timestamp, 100);
+        assert_eq!(account_store::read_credentials(&path).unwrap()["Player"], "fixture-secret");
+        assert!(select_portable_account(&accounts, "76561197960265730", Some("player")).is_err());
+        assert!(select_portable_account(&accounts, "", None).is_err());
+        fs::remove_file(vdf_path(dir.to_str().unwrap())).unwrap();
+        assert_eq!(portable_accounts_at(Some(dir.to_str().unwrap()), &path).unwrap().len(), 3);
+        account_store::remove_account(&path, "portable_only").unwrap();
+        let accounts = portable_accounts_at(Some(dir.to_str().unwrap()), &path).unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert!(accounts.iter().all(|account| account.account_name != "portable_only"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn portable_login_times_survive_missing_steam_timestamps_and_keep_the_latest_success() {
         let dir = std::env::temp_dir().join(format!("gameready-login-times-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(dir.join("config")).unwrap();
@@ -3222,7 +3353,7 @@ pub fn set_paths(lol_root: String, steam_root: String) -> Result<AppStatus, Stri
     if root_changed {
         let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         *STEAM_PROGRESS.lock().unwrap() = Some(SteamProgress { generation, phase: "idle".into(),
-            message: "Steam 路径已更新，上次登录确认已取消".into(), sid64: None });
+            message: "Steam 路径已更新，上次登录确认已取消".into(), sid64: None, account_name: None });
     }
     let mut status = get_status();
     status.paths_valid = valid;
@@ -3413,13 +3544,12 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
 /// 账号列表（前端账号模态渲染）
 #[tauri::command]
 pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
-    match steam_root_or_err() { Ok(root) => accounts_for_root(&root), Err(_) => Ok(Vec::new()) }
+    portable_accounts()
 }
 
 #[tauri::command]
-pub fn account_password(sid64: String) -> Result<String, String> {
-    let account = accounts_for_root(&steam_root_or_err()?)?.into_iter().find(|a| a.steam_id64 == sid64)
-        .ok_or("账号不存在，请刷新列表后重试")?;
+pub fn account_password(sid64: String, account_name: Option<String>) -> Result<String, String> {
+    let account = select_portable_account(&portable_accounts()?, &sid64, account_name.as_deref())?;
     get_cred(&account.account_name).filter(|password| !password.is_empty())
         .ok_or_else(|| "本机未保存该账号的可用密码，请先补充密码".into())
 }
@@ -3463,18 +3593,21 @@ pub fn clipboard_read(sequence: Option<u32>) -> Result<Option<ClipboardText>, St
 
 /// 登录准备在后台线程执行；验证码和服务器等待由可取消的确认线程处理。
 #[tauri::command]
-pub async fn switch_account(sid64: String, app: AppHandle) -> Result<LoginResult, String> {
-    tauri::async_runtime::spawn_blocking(move || start_login(Some(sid64), String::new(), None, app))
+pub async fn switch_account(sid64: String, account_name: Option<String>, app: AppHandle) -> Result<LoginResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = select_portable_account(&portable_accounts()?, &sid64, account_name.as_deref())?;
+        start_login(None, account.account_name, None, app)
+    })
         .await.map_err(|e| format!("后台任务失败: {e}"))?
 }
 
 #[tauri::command]
-pub async fn delete_account(sid64: String, app: AppHandle) -> Result<String, String> {
+pub async fn delete_account(sid64: String, account_name: Option<String>, app: AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _steam_op = STEAM_OP.try_lock().map_err(|_| "Steam 正在应用操作，请稍候重试")?;
         let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         steam_progress(&app, generation, "stopping", "正在清理本机 Steam 账号", Some(&sid64));
-        let result = delete_locked(&sid64);
+        let result = delete_locked(&sid64, account_name.as_deref());
         steam_progress(&app, generation, "idle", "", None);
         match &result {
             Ok(name) => log("acct", "删除 Steam 账号", &format!("已删除 {name}"), true),

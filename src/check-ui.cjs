@@ -53,7 +53,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             return clone({ ...f.status, steam_operation: f.operation });
           }
           if(command === 'get_settings') return { accent: '#00e5ff', close_behavior: 'tray' };
-          if(command === 'accounts_list') return clone(window.backupFixture.accounts);
+          if(command === 'accounts_list') {
+            if(window.backupFixture.accountsError) throw new Error('fixture Data is temporarily unreadable');
+            return clone(window.backupFixture.accounts);
+          }
           if(command === 'clipboard_read') {
             const f=window.backupFixture;
             if(f.clipboardFail) throw new Error('fixture clipboard is locked');
@@ -68,8 +71,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
           if(command === 'delete_account') {
             await new Promise(resolve=>setTimeout(resolve,40));
             const f=window.backupFixture;
-            f.accounts=f.accounts.filter(account=>account.steam_id64!==args.sid64);
-            return 'fixture_delete';
+            f.accounts=f.accounts.filter(account=>args.accountName
+              ?account.account_name.toLowerCase()!==args.accountName.toLowerCase():account.steam_id64!==args.sid64);
+            return args.accountName || 'fixture_delete';
           }
           if(command === 'list_logs') {
             const f=window.backupFixture, logs=clone(f.logs.filter(l=>args.filter==='all'||l.kind===args.filter));
@@ -105,7 +109,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
           if(command === 'switch_account' || command === 'login_new') {
             const f = window.backupFixture, generation = ++f.generation;
             const operation = (phase,message) => {
-              f.operation = { generation, phase, message, sid64: args.sid64 || null };
+              f.operation = { generation, phase, message, sid64: args.sid64 || null, account_name: args.accountName || args.account || null };
               emit('steam-operation',f.operation);
             };
             operation('starting','正在启动 Steam');
@@ -442,7 +446,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByRole('menuitem',{name:'复制密码',exact:true}).click();
     await page.waitForFunction(()=>window.backupFixture.copied===' visible ---- password ');
     assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='account_password').at(-1).args),
-      {sid64:'76561198000000001'});
+      {sid64:'76561198000000001',accountName:'saved_player'});
     assert.equal(await page.locator('#tkTxt').textContent(),'密码已复制');
     await page.evaluate(()=>window.backupFixture.passwordMissing=true);
     await copiedCard.click({button:'right'});
@@ -482,7 +486,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await clickSavedLogin();
     await assertLoginFeedback('已登录 Saved Player，配置覆盖完成', true);
     assert.deepEqual(await page.evaluate(() => window.backupFixture.calls.find(c => c.command === 'switch_account').args),
-      { sid64: '76561198000000001' });
+      { sid64: '76561198000000001', accountName:'saved_player' });
     await page.evaluate(() => window.backupFixture.loginResult = {
       name: 'Saved Player', message: '已登录 Saved Player，但配置覆盖失败：模拟写入失败', ok: false
     });
@@ -702,9 +706,83 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('.modal-mask.show').count(),0,'Delete must execute without a confirmation dialog');
     await page.waitForFunction(()=>!document.querySelector('#acctCards .acct[data-sid="76561198000000009"]'));
     assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='delete_account').map(c=>c.args)),
-      [{sid64:'76561198000000009'}]);
+      [{sid64:'76561198000000009',accountName:'fixture_delete'}]);
     assert.match(await page.locator('#tkTxt').textContent(),/已删除 fixture_delete/);
     console.log('PASS account deletion executes once directly and refreshes the list without confirmation');
+
+    await page.evaluate(async()=>{
+      const f=window.backupFixture;
+      f.accounts=[{steam_id64:'',account_name:'portable_one',persona_name:'',timestamp:0},
+        {steam_id64:'',account_name:'portable_two',persona_name:'',timestamp:0}];
+      f.status={...f.status,steam_running:false,current_steam_id64:null,paths_valid:{}};
+      f.operation=null;steamOperation=null;
+      await refreshStatus();await refreshAccounts();
+    });
+    await page.waitForFunction(()=>document.querySelectorAll('#acctCards .acct').length===2 && !acctBusy);
+    const portableOne=page.locator('#acctCards .acct[data-account="portable_one"]');
+    const portableTwo=page.locator('#acctCards .acct[data-account="portable_two"]');
+    assert.equal(await portableOne.locator('.acct-name > span').first().textContent(),'portable_one');
+    assert.equal(await portableTwo.locator('.acct-name > span').first().textContent(),'portable_two');
+    await portableTwo.click({button:'right'});
+    await page.getByRole('menuitem',{name:'复制账号',exact:true}).click();
+    await page.waitForFunction(()=>window.backupFixture.copied==='portable_two');
+    await portableTwo.click({button:'right'});
+    await page.getByRole('menuitem',{name:'复制密码',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='account_password').at(-1).args),
+      {sid64:'',accountName:'portable_two'});
+    await portableTwo.click({button:'right'});
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.stableRow=document.querySelector('#acctCards .acct[data-account="portable_two"]');
+      f.pollCount=f.calls.filter(c=>c.command==='accounts_list').length;
+    });
+    await page.waitForFunction(()=>window.backupFixture.calls.filter(c=>c.command==='accounts_list').length>window.backupFixture.pollCount);
+    assert.equal(await page.locator('#accountMenu').isVisible(),true,'An unchanged periodic read preserves the open menu');
+    assert.equal(await page.evaluate(()=>window.backupFixture.stableRow===document.querySelector('#acctCards .acct[data-account="portable_two"]')),true);
+    await page.keyboard.press('Escape');
+    assert.equal(await portableTwo.evaluate(row=>document.activeElement===row),true);
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.loginResult={name:'portable_one',message:'等待 portable_one 验证',pending:true,ok:false};
+    });
+    await portableOne.hover();await portableOne.getByRole('button',{name:'登录',exact:true}).click();
+    await page.waitForFunction(()=>steamOperation?.phase==='waiting');
+    assert.equal(await portableOne.getByRole('button',{name:'登录中…'}).isDisabled(),true);
+    assert.equal(await portableTwo.getByRole('button',{name:'登录',exact:true}).isEnabled(),true,
+      'Unknown SteamIDs must not mark every portable account as the pending login target');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='switch_account').at(-1).args),
+      {sid64:'',accountName:'portable_one'});
+    await portableTwo.hover();await portableTwo.getByRole('button',{name:'删除',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#acctCards .acct[data-account="portable_two"]'));
+    assert.equal(await portableOne.count(),1,'Deleting one account without a SteamID must retain the other');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='delete_account').at(-1).args),
+      {sid64:'',accountName:'portable_two'});
+    await page.evaluate(()=>{
+      const f=window.backupFixture;f.operation=null;steamOperation=null;
+      f.accounts.push({steam_id64:'',account_name:'portable_polled',persona_name:'',timestamp:0});
+    });
+    await page.waitForFunction(()=>!!document.querySelector('#acctCards .acct[data-account="portable_polled"]'));
+    await page.evaluate(()=>{
+      const f=window.backupFixture;
+      f.accounts.push({steam_id64:'',account_name:'portable_focus',persona_name:'',timestamp:0});
+      window.dispatchEvent(new Event('focus'));
+    });
+    await page.waitForFunction(()=>!!document.querySelector('#acctCards .acct[data-account="portable_focus"]'));
+    await page.locator('#nav-lol').click();
+    await page.evaluate(()=>window.backupFixture.accounts.push({steam_id64:'',account_name:'portable_tab',persona_name:'',timestamp:0}));
+    await page.locator('#nav-steam').click();
+    await page.waitForFunction(()=>!!document.querySelector('#acctCards .acct[data-account="portable_tab"]'));
+    await page.evaluate(async()=>{
+      const f=window.backupFixture;f.accountsError=true;f.readErrorToasts=0;
+      const originalToast=toast;
+      toast=(message,...rest)=>{if(message.includes('账号列表读取失败')) f.readErrorToasts++;return originalToast(message,...rest);};
+      try{await refreshAccounts(true);await refreshAccounts(true);}
+      finally{toast=originalToast;f.accountsError=false;}
+    });
+    assert.equal(await page.evaluate(()=>window.backupFixture.readErrorToasts),1);
+    assert.equal(await page.locator('#acctCards .acct').count(),4,'A temporary read error must preserve the last loaded rows');
+    await page.evaluate(async()=>{window.backupFixture.accounts=[];await refreshAccounts();});
+    console.log('PASS portable accounts without SteamIDs: display, scoped copy/login/delete, stable polling, focus/tab refresh and deduplicated read errors');
 
     const dialogs=[];
     page.on('dialog',async dialog=>{dialogs.push(dialog.message());await dialog.dismiss();});

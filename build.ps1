@@ -4,6 +4,28 @@ param([switch]$Clean)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $oldEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
+
+function Stop-GameReadyProcesses {
+    foreach ($running in @(Get-Process -Name gameready -ErrorAction SilentlyContinue)) {
+        try {
+            if (-not $running.HasExited) {
+                # 包含 WebView 子进程，不能只关闭主窗口（可能只是隐藏到托盘）。
+                $stopper = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/taskkill.exe') `
+                    -ArgumentList @('/PID', $running.Id, '/T', '/F') -WindowStyle Hidden -Wait -PassThru
+                try {
+                    if ($stopper.ExitCode -ne 0 -and -not $running.HasExited) {
+                        throw 'Cannot stop GameReady; executable replacement stopped'
+                    }
+                } finally { $stopper.Dispose() }
+            }
+            if (-not $running.WaitForExit(10000)) { throw 'GameReady did not exit; executable replacement stopped' }
+        } finally { $running.Dispose() }
+    }
+    if (Get-Process -Name gameready -ErrorAction SilentlyContinue) {
+        throw 'GameReady is still running; executable replacement stopped'
+    }
+}
+
 Push-Location $projectRoot
 try {
     $version = (Get-Content -LiteralPath 'tauri.conf.json' -Encoding UTF8 -Raw | ConvertFrom-Json).version
@@ -44,7 +66,7 @@ try {
             }
         }
     }
-    # 每次打包后先关闭 GameReady，再更新项目与桌面的程序；Data 保留在原位置。
+    # 每次打包固定交付到桌面 gameready.exe；Data 保留在原位置。
     $desktopDir = [Environment]::GetFolderPath('DesktopDirectory', [Environment+SpecialFolderOption]::DoNotVerify)
     if (-not $desktopDir) {
         $desktopDir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name Desktop -ErrorAction Stop).Desktop
@@ -53,12 +75,7 @@ try {
     if (-not $desktopDir -or -not (Test-Path -LiteralPath $desktopDir -PathType Container)) {
         throw 'Cannot locate the desktop folder'
     }
-    $desktopExe = Join-Path $desktopDir 'GameReady.exe'
-    foreach ($running in @(Get-Process -Name gameready -ErrorAction SilentlyContinue)) {
-        $running.Kill()
-        if (-not $running.WaitForExit(10000)) { throw 'GameReady did not exit; executable replacement stopped' }
-    }
-    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $projectRoot 'gameready.exe') -Force
+    $desktopExe = Join-Path $desktopDir 'gameready.exe'
     $exeAsset = Join-Path $releaseDir "$assetBase.exe"
     Copy-Item -LiteralPath $builtExe -Destination $exeAsset -Force
 
@@ -87,11 +104,14 @@ try {
             }
         } finally { $stream.Dispose(); $sha256.Dispose() }
     }
+    # 压缩与校验完成后，在替换前停止并等待退出，缩短关闭程序到更新完成的间隔。
+    Stop-GameReadyProcesses
+    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $projectRoot 'gameready.exe') -Force
     Copy-Item -LiteralPath $builtExe -Destination $desktopExe -Force
     if ((Get-FileHash -LiteralPath $desktopExe).Hash -ne (Get-FileHash -LiteralPath $builtExe).Hash) {
         throw 'Desktop executable verification failed'
     }
-    Write-Output 'Desktop GameReady.exe updated and verified'
+    Write-Output 'Desktop gameready.exe updated and verified'
     if ($Clean) {
         cargo clean
         if ($LASTEXITCODE -ne 0) { throw 'Build cache cleanup failed' }

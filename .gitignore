@@ -5,7 +5,14 @@
 /release
 
 # 运行时数据（便携模式：exe 同级生成，随文件夹迁移，不入库）
-/Data
+[Dd][Aa][Tt][Aa]/
+
+# 本地私密配置与运行时账号文件
+.env
+.env.*
+accounts.json
+steam-login-times.json
+logs.jsonl
 
 # IDE / 杂项
 .vscode

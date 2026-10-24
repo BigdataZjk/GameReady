@@ -221,6 +221,81 @@ pub fn read_credentials(path: &Path) -> Result<BTreeMap<String, String>, String>
     Ok(load_locked(path)?.accounts.into_iter().filter_map(|(name, account)| account.password.map(|password| (name, password))).collect())
 }
 
+/// 每次从 exe 旁的 Data 读取完整账号目录，不依赖本机 Steam 历史或密码是否已保存。
+/// 对外只返回显示资料；密码、备份凭据和队列不会进入前端账号列表。
+pub fn read_accounts(path: &Path) -> Result<Vec<crate::SteamAccount>, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let store = load_locked(path)?;
+    let times = login_times(&store);
+    let mut accounts: BTreeMap<String, crate::SteamAccount> = BTreeMap::new();
+    for (name, account) in store.accounts {
+        if name.trim().is_empty() { continue; }
+        let sid = account.steam_id64.filter(|sid| valid_sid(sid)).unwrap_or_default();
+        let timestamp = (if valid_time(account.last_login) { account.last_login } else { 0 })
+            .max(times.get(&sid).copied().unwrap_or(0));
+        let persona = account.extra.get("persona_name").and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        let key = name.to_ascii_lowercase();
+        if let Some(existing) = accounts.get_mut(&key) {
+            // 大小写变体可能由密码/回执分别写入；显示成一行，并保留最完整的资料。
+            if !sid.is_empty() && (existing.steam_id64.is_empty() || timestamp > existing.timestamp) {
+                existing.steam_id64 = sid;
+            }
+            if let Some(persona) = persona {
+                if existing.persona_name == existing.account_name || timestamp >= existing.timestamp {
+                    existing.persona_name = persona.into();
+                }
+            }
+            existing.timestamp = existing.timestamp.max(timestamp);
+        } else {
+            accounts.insert(key, crate::SteamAccount { steam_id64: sid, account_name: name.clone(),
+                persona_name: persona.unwrap_or(&name).into(), auto_login: false, timestamp });
+        }
+    }
+    Ok(accounts.into_values().collect())
+}
+
+/// 删除便携目录中的完整账号，包含所有大小写变体和备份记录，避免刷新时重新出现。
+pub fn remove_account(path: &Path, name: &str) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut store = load_locked(path)?;
+    let before = serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())?;
+    let removed_ids: BTreeSet<_> = store.accounts.iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .filter_map(|(_, account)| account.steam_id64.clone()).collect();
+    store.accounts.retain(|key, _| !key.eq_ignore_ascii_case(name));
+    store.unassigned_login_times.retain(|sid, _| !removed_ids.contains(sid));
+    // 通常队列与所属账号同名；对历史中错位的队列也按实际账号清理，并重映射索引。
+    let mut positions = BTreeMap::new();
+    for (key, account) in &mut store.accounts {
+        let mut pending = Vec::new();
+        for (old_index, entry) in std::mem::take(&mut account.pending).into_iter().enumerate() {
+            if entry.get("account").and_then(Value::as_str).is_some_and(|account| account.eq_ignore_ascii_case(name)) { continue; }
+            positions.insert((key.clone(), old_index), pending.len());
+            pending.push(entry);
+        }
+        account.pending = pending;
+    }
+    store.pending_order = store.pending_order.into_iter().filter_map(|mut position| {
+        position.index = *positions.get(&(position.account.clone(), position.index))?;
+        Some(position)
+    }).collect();
+    if serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())? != before {
+        // 与删除一同提交失效标记，任何正在上传的旧快照都不能再写回账号回执。
+        let has_pending = store.accounts.values().any(|account| !account.pending.is_empty());
+        let global = store.backup.as_object_mut().ok_or_else(|| invalid(path))?;
+        for key in ["revision", "state_version"] {
+            let next = global.get(key).and_then(Value::as_u64).unwrap_or(0).saturating_add(1);
+            global.insert(key.into(), Value::from(next));
+        }
+        let enabled = global.get("config").and_then(|config| config.get("enabled")).and_then(Value::as_bool).unwrap_or(false);
+        global.insert("status".into(), Value::String(if !enabled { "disabled" } else if has_pending { "pending" } else { "idle" }.into()));
+        global.insert("message".into(), Value::String("本地账号已删除".into()));
+        crate::atomic_json(path, &store)?;
+    }
+    Ok(())
+}
+
 pub fn set_credential(path: &Path, name: &str, password: &str) -> Result<(), String> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut store = load_locked(path)?;
@@ -277,19 +352,30 @@ pub fn read_login_times(path: &Path) -> Result<BTreeMap<String, i64>, String> {
     Ok(login_times(&load_locked(path)?))
 }
 
+#[cfg(test)]
 pub fn merge_login_times(path: &Path, values: &[(String, String, i64)]) -> Result<BTreeMap<String, i64>, String> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut store = load_locked(path)?;
     let before = serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())?;
-    let mut times = login_times(&store);
+    merge_login_values(&mut store, values);
+    if serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())? != before { crate::atomic_json(path, &store)?; }
+    Ok(login_times(&store))
+}
+
+fn merge_login_values(store: &mut Store, values: &[(String, String, i64)]) {
+    let mut times = login_times(store);
     for (sid, name, observed) in values {
         if !valid_sid(sid) { continue; }
-        let timestamp = times.get(sid).copied().unwrap_or(0).max(if valid_time(*observed) { *observed } else { 0 });
+        let mut timestamp = times.get(sid).copied().unwrap_or(0).max(if valid_time(*observed) { *observed } else { 0 });
         if name.is_empty() {
             if timestamp > 0 { store.unassigned_login_times.insert(sid.clone(), timestamp); }
         } else {
             let key = matching_key(&store.accounts, name);
             let account = store.accounts.entry(key).or_default();
+            if account.steam_id64.as_deref().is_none_or(|previous| !valid_sid(previous) || previous == sid.as_str())
+                && valid_time(account.last_login) {
+                timestamp = timestamp.max(account.last_login);
+            }
             if let Some(previous) = &account.steam_id64 {
                 if previous != sid && valid_time(account.last_login) {
                     store.unassigned_login_times.entry(previous.clone()).and_modify(|time| *time = (*time).max(account.last_login)).or_insert(account.last_login);
@@ -301,10 +387,29 @@ pub fn merge_login_times(path: &Path, values: &[(String, String, i64)]) -> Resul
         }
         if timestamp > 0 { times.insert(sid.clone(), timestamp); }
     }
-    if serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())? != before { crate::atomic_json(path, &store)?; }
-    Ok(login_times(&store))
 }
 
+/// 将本机可观察到的资料补存到便携目录；空昵称不会清除从其他机器带来的昵称。
+pub fn merge_account_profiles(path: &Path, accounts: &[crate::SteamAccount]) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut store = load_locked(path)?;
+    let before = serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())?;
+    let values: Vec<_> = accounts.iter().map(|account|
+        (account.steam_id64.clone(), account.account_name.clone(), account.timestamp)).collect();
+    merge_login_values(&mut store, &values);
+    for profile in accounts {
+        if profile.account_name.trim().is_empty() { continue; }
+        let key = matching_key(&store.accounts, &profile.account_name);
+        let account = store.accounts.entry(key).or_default();
+        if !profile.persona_name.trim().is_empty() {
+            account.extra.insert("persona_name".into(), Value::String(profile.persona_name.clone()));
+        }
+    }
+    if serde_json::to_vec(&store).map_err(|_| "账号数据序列化失败".to_string())? != before { crate::atomic_json(path, &store)?; }
+    Ok(())
+}
+
+#[cfg(test)]
 pub fn remove_login_time(path: &Path, sid64: &str) -> Result<(), String> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut store = load_locked(path)?;
@@ -360,6 +465,167 @@ mod tests {
             store.accounts.insert((*name).into(), Account { password: Some((*password).into()), ..Default::default() });
         }
         crate::atomic_json(path, &store).unwrap();
+    }
+
+    #[test]
+    fn portable_inventory_includes_accounts_without_local_history_or_ids_and_never_exposes_passwords() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let document = json!({"version":2,"accounts":{
+            "Player":{"password":"private fixture password","steam_id64":"76561197960265729","last_login":80,
+                "persona_name":"Portable Player"},
+            "player":{"last_login":100},
+            "password_only":{"password":"another private fixture password"},
+            "missing_password":{},
+            "invalid_id":{"steam_id64":"invalid","last_login":-1},
+            " ":{}
+        },"unassigned_login_times":{"76561197960265729":120}});
+        let bytes = serde_json::to_vec(&document).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let accounts = read_accounts(&path).unwrap();
+        assert_eq!(accounts.len(), 4);
+        let player = accounts.iter().find(|a| a.account_name.eq_ignore_ascii_case("player")).unwrap();
+        assert_eq!(player.steam_id64, "76561197960265729");
+        assert_eq!(player.timestamp, 120);
+        assert_eq!(player.persona_name, "Portable Player");
+        for name in ["password_only", "missing_password", "invalid_id"] {
+            let account = accounts.iter().find(|a| a.account_name == name).unwrap();
+            assert_eq!(account.steam_id64, "");
+            assert_eq!(account.persona_name, name);
+            assert!(!account.auto_login);
+        }
+        let public = serde_json::to_string(&accounts).unwrap();
+        assert!(!public.contains("private fixture password"));
+        assert!(serde_json::to_value(&accounts).unwrap().as_array().unwrap().iter().all(|a| a.get("password").is_none()));
+        assert_eq!(fs::read(&path).unwrap(), bytes, "Reading the directory must not rewrite user data");
+    }
+
+    #[test]
+    fn portable_inventory_reloads_replaced_data_on_every_read() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        assert!(read_accounts(&path).unwrap().is_empty());
+        assert!(!path.exists());
+        fs::write(&path, br#"{"version":2,"accounts":{"first":{"password":"one"}}}"#).unwrap();
+        assert_eq!(read_accounts(&path).unwrap()[0].account_name, "first");
+        fs::write(&path, br#"{"version":2,"accounts":{"replacement":{"password":"two"}}}"#).unwrap();
+        assert_eq!(read_accounts(&path).unwrap()[0].account_name, "replacement");
+    }
+
+    #[test]
+    fn observed_profiles_preserve_portable_names_credentials_and_unknown_fields() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        fs::write(&path, br#"{"version":2,"accounts":{"player":{"password":"fixture secret","future":"kept"},"portable_only":{}},"future_root":42}"#).unwrap();
+        let mut profile = crate::SteamAccount { steam_id64:"76561197960265729".into(),
+            account_name:"Player".into(),persona_name:"Portable Nickname".into(),auto_login:true,timestamp:100 };
+        merge_account_profiles(&path, &[profile.clone()]).unwrap();
+        profile.timestamp = 0;
+        profile.persona_name.clear();
+        merge_account_profiles(&path, &[profile]).unwrap();
+        let accounts = read_accounts(&path).unwrap();
+        assert_eq!(accounts.len(), 2);
+        let player = accounts.iter().find(|a| a.account_name == "player").unwrap();
+        assert_eq!(player.persona_name, "Portable Nickname");
+        assert_eq!(player.timestamp, 100);
+        assert_eq!(read_credentials(&path).unwrap()["player"], "fixture secret");
+        let data: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(data["accounts"]["player"]["future"], "kept");
+        assert_eq!(data["future_root"], 42);
+    }
+
+    #[test]
+    fn binding_a_new_steam_id_keeps_the_portable_accounts_known_login_time() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        for saved_id in [None, Some("invalid"), Some("76561197960265729")] {
+            let mut account = json!({"last_login":100});
+            if let Some(sid) = saved_id { account["steam_id64"] = json!(sid); }
+            fs::write(&path, serde_json::to_vec(&json!({"version":2,"accounts":{"player":account}})).unwrap()).unwrap();
+            let profile = crate::SteamAccount { steam_id64:"76561197960265729".into(),
+                account_name:"PLAYER".into(),persona_name:String::new(),auto_login:false,timestamp:0 };
+            merge_account_profiles(&path, &[profile]).unwrap();
+            let account = &read_accounts(&path).unwrap()[0];
+            assert_eq!(account.steam_id64, "76561197960265729");
+            assert_eq!(account.timestamp, 100);
+            assert_eq!(read_login_times(&path).unwrap()["76561197960265729"], 100);
+        }
+        // 确实换成另一个有效 SteamID 时，旧时间仍属于旧身份。
+        merge_account_profiles(&path, &[crate::SteamAccount { steam_id64:"76561197960265730".into(),
+            account_name:"player".into(),persona_name:String::new(),auto_login:false,timestamp:50 }]).unwrap();
+        assert_eq!(read_accounts(&path).unwrap()[0].timestamp, 50);
+        assert_eq!(read_login_times(&path).unwrap()["76561197960265729"], 100);
+    }
+
+    #[test]
+    fn deleting_portable_account_removes_every_case_and_preserves_other_queue_positions() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let pending = |id: &str, name: &str| json!({"id":id,"account":name,"password":"fixture",
+            "source":"test","ts_ms":1});
+        let document = json!({"version":2,"accounts":{
+            "Player":{"password":"fixture","steam_id64":"76561197960265729","last_login":100,
+                "pending":[pending("removed","Player")],"confirmed_credential":"receipt"},
+            "PLAYER":{"steam_id64":"76561197960265730","last_login":80,"synced_credential":"receipt"},
+            "other":{"password":"keep","steam_id64":"76561197960265731","last_login":60,
+                "pending":[pending("one","other"),pending("misfiled","pLaYeR"),pending("two","other")],"future":"kept"}
+        },"unassigned_login_times":{"76561197960265729":100,"76561197960265730":80,"76561197960265731":60},
+        "pending_order":[{"account":"other","index":2},{"account":"Player","index":0},
+            {"account":"other","index":0},{"account":"other","index":1}],
+        "backup":{"future":"kept","revision":9,"state_version":13,"config":{"enabled":true}},"future_root":42});
+        fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        remove_account(&path, "player").unwrap();
+        assert_eq!(read_accounts(&path).unwrap().len(), 1);
+        assert_eq!(read_accounts(&path).unwrap()[0].account_name, "other");
+        assert_eq!(read_credentials(&path).unwrap(), BTreeMap::from([("other".into(), "keep".into())]));
+        assert_eq!(read_login_times(&path).unwrap(), BTreeMap::from([("76561197960265731".into(), 60)]));
+        let backup = read_backup(&path).unwrap();
+        assert_eq!(backup["queue"], json!([pending("two","other"),pending("one","other")]));
+        assert_eq!(backup["confirmed_credentials"], json!({}));
+        assert_eq!(backup["synced_credentials"], json!({}));
+        assert_eq!(backup["revision"], 10, "Deleting must invalidate an upload snapshot in the same write");
+        assert_eq!(backup["state_version"], 14);
+        assert_eq!(backup["status"], "pending");
+        let deleted_bytes = fs::read(&path).unwrap();
+        remove_account(&path, "pLaYeR").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), deleted_bytes, "A repeated deletion must not change the surviving records");
+        write_backup(&path, &backup).unwrap();
+        assert_eq!(read_accounts(&path).unwrap().len(), 1, "Backup round trip must not resurrect deleted records");
+        let data: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(data["accounts"]["other"]["future"], "kept");
+        assert_eq!(data["backup"]["future"], "kept");
+        assert_eq!(data["future_root"], 42);
+    }
+
+    #[test]
+    fn failed_account_delete_keeps_credentials_and_backup_revision_together() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let original = br#"{"version":2,"accounts":{"player":{"password":"fixture"}},"backup":{"revision":9,"state_version":13}}"#;
+        fs::write(&path, original).unwrap();
+        let guard = fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ.0).open(&path).unwrap();
+        assert!(remove_account(&path, "player").is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        drop(guard);
+        remove_account(&path, "player").unwrap();
+        assert!(read_accounts(&path).unwrap().is_empty());
+        assert_eq!(read_backup(&path).unwrap()["revision"], 10);
+        assert_eq!(read_backup(&path).unwrap()["state_version"], 14);
+    }
+
+    #[test]
+    fn portable_inventory_rejects_corruption_and_keeps_original_on_failed_delete_or_merge() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        for bytes in [b"{broken".as_slice(), br#"{"version":3,"accounts":{}}"#] {
+            fs::write(&path, bytes).unwrap();
+            assert!(read_accounts(&path).is_err());
+            assert!(remove_account(&path, "player").is_err());
+            assert!(merge_account_profiles(&path, &[]).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
     }
 
     #[test]
