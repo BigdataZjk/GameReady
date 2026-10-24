@@ -2,11 +2,11 @@
 
 Windows 游戏配置便携工具，支持 LOL 配置守护、Steam 设置与账号管理，以及 NAS 账号备份。单 exe，无需安装。
 
-当前版本：**v0.1.18** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
+当前版本：**v0.1.18** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
 
 ## 下载与使用
 
-1. 从 [Releases](https://github.com/BigdataZjk/GameReady/releases/latest) 下载 exe，或解压 zip 后运行；缺少 WebView2 时按提示安装。
+1. 点击[下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe)，直接下载 `gameready.exe` 后运行；缺少 WebView2 时按提示安装。
 2. 在路径设置中填写 LOL 或 Steam 安装目录，可只配置一个。
 3. 按需使用以下功能，支持托盘运行和开机自启。
 
