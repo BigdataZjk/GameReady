@@ -15,6 +15,7 @@ fn empty_object() -> Value { Value::Object(Map::new()) }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Account {
+    favorite: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,6 +238,7 @@ pub fn read_accounts(path: &Path) -> Result<Vec<crate::SteamAccount>, String> {
             .filter(|value| !value.trim().is_empty());
         let key = name.to_ascii_lowercase();
         if let Some(existing) = accounts.get_mut(&key) {
+            existing.favorite |= account.favorite;
             // 大小写变体可能由密码/回执分别写入；显示成一行，并保留最完整的资料。
             if !sid.is_empty() && (existing.steam_id64.is_empty() || timestamp > existing.timestamp) {
                 existing.steam_id64 = sid;
@@ -249,10 +251,25 @@ pub fn read_accounts(path: &Path) -> Result<Vec<crate::SteamAccount>, String> {
             existing.timestamp = existing.timestamp.max(timestamp);
         } else {
             accounts.insert(key, crate::SteamAccount { steam_id64: sid, account_name: name.clone(),
-                persona_name: persona.unwrap_or(&name).into(), auto_login: false, timestamp });
+                persona_name: persona.unwrap_or(&name).into(), auto_login: false, timestamp, favorite: account.favorite });
         }
     }
     Ok(accounts.into_values().collect())
+}
+
+/// 修改已有账号的全部大小写变体，不创建已删除的账号。
+pub fn set_favorite(path: &Path, name: &str, favorite: bool) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut store = load_locked(path)?;
+    let mut found = false;
+    for (key, account) in &mut store.accounts {
+        if key.eq_ignore_ascii_case(name) {
+            account.favorite = favorite;
+            found = true;
+        }
+    }
+    if !found { return Err("账号不存在，请刷新列表后重试".into()); }
+    crate::atomic_json(path, &store)
 }
 
 /// 删除便携目录中的完整账号，包含所有大小写变体和备份记录，避免刷新时重新出现。
@@ -513,12 +530,38 @@ mod tests {
     }
 
     #[test]
+    fn favorite_survives_profile_merges_and_updates_all_case_variants() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        fs::write(&path, br#"{"version":2,"accounts":{"Player":{"password":"fixture","future":"keep"},"player":{"favorite":true},"other":{}},"future_root":42}"#).unwrap();
+        let list = read_accounts(&path).unwrap();
+        assert!(list.iter().find(|a| a.account_name.eq_ignore_ascii_case("player")).unwrap().favorite);
+        assert!(!list.iter().find(|a| a.account_name == "other").unwrap().favorite);
+        set_favorite(&path, "PLAYER", false).unwrap();
+        let doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(doc["accounts"]["Player"]["favorite"], false);
+        assert_eq!(doc["accounts"]["player"]["favorite"], false);
+        assert_eq!(doc["accounts"]["Player"]["password"], "fixture");
+        assert_eq!(doc["accounts"]["Player"]["future"], "keep");
+        assert_eq!(doc["future_root"], 42);
+        assert!(!read_accounts(&path).unwrap().iter().find(|a| a.account_name.eq_ignore_ascii_case("player")).unwrap().favorite);
+        set_favorite(&path, "player", true).unwrap();
+        let profile = crate::SteamAccount { steam_id64: "76561197960265729".into(), account_name: "PLAYER".into(),
+            persona_name: "Nickname".into(), auto_login: false, timestamp: 100, favorite: false };
+        merge_account_profiles(&path, &[profile]).unwrap();
+        assert!(read_accounts(&path).unwrap().iter().find(|a| a.account_name.eq_ignore_ascii_case("player")).unwrap().favorite);
+        let before = fs::read(&path).unwrap();
+        assert!(set_favorite(&path, "missing", true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
     fn observed_profiles_preserve_portable_names_credentials_and_unknown_fields() {
         let fixture = Fixture::new();
         let path = fixture.path();
         fs::write(&path, br#"{"version":2,"accounts":{"player":{"password":"fixture secret","future":"kept"},"portable_only":{}},"future_root":42}"#).unwrap();
         let mut profile = crate::SteamAccount { steam_id64:"76561197960265729".into(),
-            account_name:"Player".into(),persona_name:"Portable Nickname".into(),auto_login:true,timestamp:100 };
+            account_name:"Player".into(),persona_name:"Portable Nickname".into(),auto_login:true,timestamp:100,favorite:false };
         merge_account_profiles(&path, &[profile.clone()]).unwrap();
         profile.timestamp = 0;
         profile.persona_name.clear();
@@ -543,7 +586,7 @@ mod tests {
             if let Some(sid) = saved_id { account["steam_id64"] = json!(sid); }
             fs::write(&path, serde_json::to_vec(&json!({"version":2,"accounts":{"player":account}})).unwrap()).unwrap();
             let profile = crate::SteamAccount { steam_id64:"76561197960265729".into(),
-                account_name:"PLAYER".into(),persona_name:String::new(),auto_login:false,timestamp:0 };
+                account_name:"PLAYER".into(),persona_name:String::new(),auto_login:false,timestamp:0,favorite:false };
             merge_account_profiles(&path, &[profile]).unwrap();
             let account = &read_accounts(&path).unwrap()[0];
             assert_eq!(account.steam_id64, "76561197960265729");
@@ -552,7 +595,7 @@ mod tests {
         }
         // 确实换成另一个有效 SteamID 时，旧时间仍属于旧身份。
         merge_account_profiles(&path, &[crate::SteamAccount { steam_id64:"76561197960265730".into(),
-            account_name:"player".into(),persona_name:String::new(),auto_login:false,timestamp:50 }]).unwrap();
+            account_name:"player".into(),persona_name:String::new(),auto_login:false,timestamp:50,favorite:false }]).unwrap();
         assert_eq!(read_accounts(&path).unwrap()[0].timestamp, 50);
         assert_eq!(read_login_times(&path).unwrap()["76561197960265729"], 100);
     }

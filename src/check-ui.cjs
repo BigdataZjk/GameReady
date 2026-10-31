@@ -57,6 +57,15 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             if(window.backupFixture.accountsError) throw new Error('fixture Data is temporarily unreadable');
             return clone(window.backupFixture.accounts);
           }
+          if(command === 'set_steam_account_favorite') {
+            const f=window.backupFixture;
+            if(f.holdFavorite) await new Promise(resolve=>f.releaseFavorite=resolve);
+            if(f.failFavorite) throw new Error('fixture save failure');
+            const account=f.accounts.find(a=>a.account_name.toLowerCase()===args.accountName.toLowerCase());
+            if(!account) throw new Error('fixture missing account');
+            account.favorite=args.favorite;
+            return null;
+          }
           if(command === 'clipboard_read') {
             const f=window.backupFixture;
             if(f.clipboardFail) throw new Error('fixture clipboard is locked');
@@ -723,6 +732,32 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const portableTwo=page.locator('#acctCards .acct[data-account="portable_two"]');
     assert.equal(await portableOne.locator('.acct-name > span').first().textContent(),'portable_one');
     assert.equal(await portableTwo.locator('.acct-name > span').first().textContent(),'portable_two');
+    assert.equal(await portableOne.locator('.acct-favorite').getAttribute('aria-pressed'),'false');
+    await portableOne.getByRole('button',{name:'收藏 portable_one'}).click();
+    await page.waitForFunction(()=>document.querySelector('#acctCards .acct[data-account="portable_one"] .acct-favorite')?.getAttribute('aria-pressed')==='true');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='set_steam_account_favorite').at(-1).args),
+      {accountName:'portable_one',favorite:true});
+    assert.equal(await portableTwo.locator('.acct-favorite').getAttribute('aria-pressed'),'false');
+    await page.evaluate(async()=>await refreshAccounts());
+    assert.equal(await portableOne.locator('.acct-favorite').getAttribute('aria-pressed'),'true','Favorite survives a fresh account read');
+    await portableOne.getByRole('button',{name:'取消收藏 portable_one'}).click();
+    await page.waitForFunction(()=>document.querySelector('#acctCards .acct[data-account="portable_one"] .acct-favorite')?.getAttribute('aria-pressed')==='false');
+    await page.evaluate(()=>{window.backupFixture.holdFavorite=true;});
+    await portableOne.getByRole('button',{name:'收藏 portable_one'}).click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseFavorite==='function');
+    assert.equal(await portableOne.locator('.acct-favorite').isDisabled(),true,'Repeated clicks are blocked while the write is pending');
+    await page.evaluate(async()=>await refreshAccounts());
+    assert.equal(await portableOne.locator('.acct-favorite').getAttribute('aria-pressed'),'false','An old read does not pretend the write succeeded');
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdFavorite=false;f.releaseFavorite();});
+    await page.waitForFunction(()=>document.querySelector('#acctCards .acct[data-account="portable_one"] .acct-favorite')?.getAttribute('aria-pressed')==='true');
+    await portableOne.getByRole('button',{name:'取消收藏 portable_one'}).click();
+    await page.waitForFunction(()=>document.querySelector('#acctCards .acct[data-account="portable_one"] .acct-favorite')?.getAttribute('aria-pressed')==='false');
+    await page.evaluate(()=>{window.backupFixture.failFavorite=true;});
+    await portableOne.getByRole('button',{name:'收藏 portable_one'}).click();
+    await page.waitForFunction(()=>document.querySelector('#tkTxt').textContent.includes('收藏更新失败'));
+    assert.equal(await portableOne.locator('.acct-favorite').getAttribute('aria-pressed'),'false','A failed write must not appear saved');
+    await page.evaluate(()=>{window.backupFixture.failFavorite=false;});
+    console.log('PASS account favorite toggles, persists across reads, and reports write failures');
     await portableTwo.click({button:'right'});
     await page.getByRole('menuitem',{name:'复制账号',exact:true}).click();
     await page.waitForFunction(()=>window.backupFixture.copied==='portable_two');

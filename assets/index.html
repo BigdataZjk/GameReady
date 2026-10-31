@@ -266,7 +266,11 @@ body.rail-dragging{ cursor:grabbing; }
 .modal-body{ padding:0 14px 14px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
 .acct{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; display:flex; align-items:center; gap:10px; transition:.15s; }
 .acct.cur{ border-color:color-mix(in srgb,var(--steam) 45%,transparent); box-shadow:0 0 12px rgba(90,162,255,.10); }
-.acct .avatar{ width:34px; height:34px; font-size:13px; }
+.acct-favorite{ width:34px; height:34px; flex:none; display:flex; align-items:center; justify-content:center; border:0; padding:0; background:transparent; color:var(--txt3); font-size:25px; line-height:1; cursor:pointer; }
+.acct-favorite:hover{ color:#f4c95d; }
+.acct-favorite.on{ color:#f4c95d; text-shadow:0 0 10px rgba(244,201,93,.35); }
+.acct-favorite:focus-visible{ outline:2px solid var(--steam); outline-offset:1px; border-radius:6px; }
+.acct-favorite:disabled{ opacity:.55; cursor:default; }
 .acct-info{ flex:1; min-width:0; }
 .acct-name{ font-size:12.5px; font-weight:600; display:flex; align-items:baseline; gap:4px; white-space:nowrap; overflow:hidden; }
 .acct-name>span:first-child{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }   /* 走查：昵称收缩截断 */
@@ -1222,6 +1226,21 @@ function refreshVisibleAccounts(){
 window.addEventListener('focus',refreshVisibleAccounts);
 document.addEventListener('visibilitychange',refreshVisibleAccounts);
 if(hasTauri) setInterval(refreshVisibleAccounts,2000);
+const favoritePending = new Set();
+async function toggleAccountFavorite(account, button){
+  const key=accountKey(account);
+  if(!key || favoritePending.has(key)) return;
+  favoritePending.add(key);
+  button.disabled=true;
+  try{
+    await invoke('set_steam_account_favorite',{accountName:account.account_name,favorite:!account.favorite});
+  }catch(e){ toast('收藏更新失败：'+errText(e),'err'); }
+  finally{
+    favoritePending.delete(key);
+    button.disabled=steamBusy();
+    await refreshAccounts(true);
+  }
+}
 /* 页内账号卡片：操作在悬停或键盘聚焦时滑出，处理中的账号在副标题显示进度。 */
 function accountCard(a, cur){
   const isCur = a === cur;
@@ -1231,8 +1250,13 @@ function accountCard(a, cur){
   card.dataset.sid = String(a.steam_id64);
   card.dataset.account = accountKey(a);
   card.tabIndex = 0;
-  const av = el('div', 'avatar', firstChar(a.persona_name || a.account_name));
-  if(isCur) av.appendChild(el('span','live'));
+  const favorite = el('button','acct-favorite'+(a.favorite?' on':''),a.favorite?'★':'☆');
+  favorite.type='button';
+  favorite.setAttribute('aria-label',(a.favorite?'取消收藏 ':'收藏 ')+(a.account_name||''));
+  favorite.setAttribute('aria-pressed',a.favorite?'true':'false');
+  favorite.title=a.favorite?'取消收藏':'收藏';
+  favorite.disabled=busy || favoritePending.has(accountKey(a));
+  favorite.addEventListener('click',()=>toggleAccountFavorite(a,favorite));
   const info = el('div','acct-info');
   const nm = el('div','acct-name');
   nm.appendChild(el('span', null, a.persona_name || a.account_name || ''));
@@ -1254,7 +1278,7 @@ function accountCard(a, cur){
   }else{
     op.appendChild(el('span','aq-tag','当前登录'));
   }
-  card.appendChild(av); card.appendChild(info); card.appendChild(op);
+  card.appendChild(favorite); card.appendChild(info); card.appendChild(op);
   return card;
 }
 function renderAccountsPage(){

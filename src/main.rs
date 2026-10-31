@@ -310,6 +310,7 @@ fn main() {
             commands::stop,
             commands::steam_cover,
             commands::accounts_list,
+            commands::set_steam_account_favorite,
             commands::account_password,
             commands::clipboard_read,
             commands::switch_account,
@@ -1162,6 +1163,7 @@ pub struct SteamAccount {
     pub persona_name: String,
     pub auto_login: bool,
     pub timestamp: i64,
+    pub favorite: bool,
 }
 
 /// 登录时间属于便携数据，不能依赖 Steam 退出/重启时可能清空的历史字段。
@@ -1284,7 +1286,7 @@ fn session_account(root: &str, sid64: &str, history: &[RawAccount]) -> Result<Op
         .map_err(|e| format!("读取 Steam 活动账号映射失败：{e}"))?;
     let Some(name) = vdf::account_for_id(&text, sid64)? else { return Ok(None); };
     Ok(Some(SteamAccount { steam_id64: sid64.into(), account_name: name, persona_name: String::new(),
-        auto_login: false, timestamp: sid64_to_sid3(sid64).and_then(|sid| read_login_success(root, &sid, 0, 0)).unwrap_or(0) }))
+        auto_login: false, timestamp: sid64_to_sid3(sid64).and_then(|sid| read_login_success(root, &sid, 0, 0)).unwrap_or(0), favorite: false }))
 }
 
 #[cfg(test)]
@@ -1405,6 +1407,7 @@ fn to_account(a: &RawAccount) -> SteamAccount {
         persona_name,
         auto_login,
         timestamp,
+        favorite: false,
     }
 }
 
@@ -3318,7 +3321,7 @@ mod regression_tests {
     #[test]
     fn login_confirmation_requires_new_timestamp_and_active_matching_account() {
         let mut account = SteamAccount { steam_id64: "76561197960265729".into(), account_name: "player".into(),
-            persona_name: String::new(), auto_login: true, timestamp: 100 };
+            persona_name: String::new(), auto_login: true, timestamp: 100, favorite: false };
         assert!(!login_observed(&account, Some(&account.steam_id64), "player", 100));
         account.timestamp = 101;
         assert!(login_observed(&account, Some(&account.steam_id64), "PLAYER", 100));
@@ -3545,6 +3548,11 @@ pub fn stop(app: tauri::AppHandle) -> Result<GuardSummary, String> {
 #[tauri::command]
 pub fn accounts_list() -> Result<Vec<SteamAccount>, String> {
     portable_accounts()
+}
+
+#[tauri::command]
+pub fn set_steam_account_favorite(account_name: String, favorite: bool) -> Result<(), String> {
+    account_store::set_favorite(&creds_path(), &account_name, favorite)
 }
 
 #[tauri::command]

@@ -2,7 +2,7 @@
 
 Windows 游戏配置便携工具，支持 LOL 配置守护、Steam 设置与账号管理，以及 NAS 账号备份。单 exe，无需安装。
 
-当前版本：**v0.1.18** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
+当前版本：**v0.1.19** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
 
 ## 下载与使用
 
@@ -24,6 +24,8 @@ Windows 游戏配置便携工具，支持 LOL 配置守护、Steam 设置与账�
 Steam 的启动位置属于账号漫游设置；开启或关闭全局配置覆盖时，账号设置都会应用“库”。应用漫游设置时同时更新该文件的 Steam 云缓存记录，保留云端版本和其他文件记录，避免新账号的配置文件被忽略；Steam 配置使用真实修改时间。启动 Steam 时使用其安装目录，保证相对路径正确。
 
 Steam 账号列表直接读取 exe 同级 `Data/accounts.json`，换电脑或移动程序后，无需在本机先登录 Steam 即可显示全部保存账号；没有 SteamID 或密码的记录也会显示。本机 Steam 历史用于补全昵称、SteamID 和有效登录时间。账号按最近登录时间从新到旧显示，无法恢复的旧时间仍显示未知。账号行悬停时从右侧滑出「登录」「删除」，键盘聚焦也可操作。界面禁用默认右键菜单，仅账号行右键提供「复制账号」「复制密码」；复制密码使用 Data 保存的密码，缺失时会提示补充。点击「删除」直接清理所选账号的本地记录，无确认弹窗。
+
+点击账号前的星标可收藏或取消收藏；收藏状态随账号保存在 `Data/accounts.json`，迁移数据后仍然保留。
 
 登录按钮前的「识别」会检查剪贴板中的单行账号密码，支持重复符号、空格分隔及「账号：… 密码：…」等格式；可识别时自适应显示，否则隐藏。点击仅填入账号和明文密码，登录需另点「登录」。
 
