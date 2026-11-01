@@ -115,7 +115,7 @@ LossOfControlEnabled=1
 
 [Performance]
 ShadowQuality=4
-FrameCapType=10
+FrameCapType=2
 EnvironmentQuality=4
 EffectsQuality=4
 CharacterQuality=4

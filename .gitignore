@@ -11,6 +11,8 @@
 .env
 .env.*
 accounts.json
+lol-accounts.json
+backup-settings.json
 steam-login-times.json
 logs.jsonl
 

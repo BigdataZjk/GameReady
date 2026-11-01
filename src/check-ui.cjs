@@ -25,13 +25,20 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         missing_password_accounts: ['missing', 'still_missing'],
         unconfirmed_password_accounts: ['unconfirmed']
       };
+      const lolSnapshot = {
+        ...clone(snapshot), config:{...clone(snapshot.config),enabled:false,remote_path:'/backup/lol-accounts.txt'},
+        queue:[], missing_password_accounts:[], unconfirmed_password_accounts:[], message:'LOL 账号备份'
+      };
+      const shared = {state_version:1,
+        connection:{host:snapshot.config.host,port:snapshot.config.port,username:snapshot.config.username,password:snapshot.config.password,fingerprint:''},
+        games:{steam:{enabled:true,remote_path:snapshot.config.remote_path},lol:{enabled:false,remote_path:lolSnapshot.config.remote_path}},migration_warning:null};
       const emit = (name, payload) => (listeners[name] || []).forEach(fn => fn({ payload: clone(payload) }));
       const publish = () => {
         snapshot.state_version++;
         const event=clone(snapshot); event.config.password='';
         emit('backup-changed',event);
       };
-      window.backupFixture = { snapshot, calls: [], accounts: [], loginResult: null, loginError: null,
+      window.backupFixture = { snapshot, lolSnapshot, shared, lolAccounts:[], calls: [], accounts: [], loginResult: null, loginError: null,
         generation: 0, operation: null, status: { paths_valid: {}, steam_running: false, lol_guard_on: false },
         holdLogin: false, earlyFinal: null, holdStatus: false, statusResolvers: [],
         failSync: false, failSave: false, clipboardText:null, clipboardSequence:0, emit, publish,
@@ -46,7 +53,68 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         window: { getCurrentWindow: () => ({ onCloseRequested: async () => {}, minimize() {}, hide() {}, close() {} }) },
         core: { invoke: async (command, args = {}) => {
           window.backupFixture.calls.push({ command, args: clone(args) });
+          if(command==='shared_backup_get') return clone(shared);
+          if(command==='backup_connection_test'){
+            const f=window.backupFixture;
+            if(f.holdSharedTest) await new Promise(resolve=>f.releaseSharedTest=resolve);
+            if(f.failSharedTest) throw Error('fixture shared connection failure');
+            return {fingerprint:'fixture-test-key',message:'公共连接测试通过'};
+          }
+          if(command==='backup_destination_test'){
+            const f=window.backupFixture;
+            if(f.holdDestinationTest) await new Promise(resolve=>f.releaseDestinationTest=resolve);
+            if(f.failDestinationTest) throw Error('fixture destination test failure');
+            return {fingerprint:'fixture-pinned-key',message:'当前备份文件路径测试通过'};
+          }
+          if(command==='backup_connection_save'||command==='backup_destination_save'){
+            const f=window.backupFixture,isConnection=command==='backup_connection_save';
+            if(isConnection&&f.holdSharedSave) await new Promise(resolve=>f.releaseSharedSave=resolve);
+            if(isConnection&&f.failSharedSave) throw Error('fixture shared save failure');
+            if(!isConnection&&f.failDestinationSave) throw Error('fixture destination save failure');
+            if(isConnection) shared.connection=clone(args.connection);
+            else shared.games[args.game]=clone(args.destination);
+            shared.migration_warning=null;shared.state_version++;
+            const saved=clone(shared);
+            // A newer notification can arrive before the save IPC returns.
+            shared.connection.fingerprint='fixture-pinned-key';shared.state_version++;
+            snapshot.config={...clone(shared.connection),...clone(shared.games.steam)};
+            lolSnapshot.config={...clone(shared.connection),...clone(shared.games.lol)};
+            snapshot.state_version++;lolSnapshot.state_version++;
+            emit('shared-backup-changed',null);emit('backup-changed',{...clone(snapshot),config:{...clone(snapshot.config),password:''}});
+            emit('lol-backup-changed',{...clone(lolSnapshot),config:{...clone(lolSnapshot.config),password:''}});
+            return saved;
+          }
           if(command === 'backup_get') return clone(snapshot);
+          if(command === 'lol_accounts_list') return clone(window.backupFixture.lolAccounts);
+          if(command === 'lol_account_fill_wegame') {
+            const f=window.backupFixture;
+            if(f.holdLolFill) await new Promise(resolve=>f.releaseLolFill=resolve);
+            if(f.failLolFill) throw {message:'fixture WeGame password input unavailable'};
+            return null;
+          }
+          if(command.startsWith('lol_account_')) {
+            const f=window.backupFixture;
+            if(f.holdLolAccount) await new Promise(resolve=>f.releaseLolAccount=resolve);
+            if(f.failLolAccount) throw new Error('fixture LOL save failure');
+            const index=f.lolAccounts.findIndex(a=>a.account_name.toLowerCase()===args.accountName.toLowerCase());
+            if(command==='lol_account_save'){
+              const a={account_name:args.accountName,password:args.password,favorite:index>=0?f.lolAccounts[index].favorite:false};
+              if(index>=0) f.lolAccounts[index]=a; else f.lolAccounts.push(a);
+              if(!lolSnapshot.queue.some(row=>row.account===a.account_name)) lolSnapshot.queue.push({account:a.account_name});
+            }else if(command==='lol_account_favorite'){if(index<0)throw Error('missing');f.lolAccounts[index].favorite=args.favorite;}
+            else if(command==='lol_account_delete'){f.lolAccounts.splice(index,1);lolSnapshot.queue=lolSnapshot.queue.filter(a=>a.account!==args.accountName);}
+            lolSnapshot.state_version++;emit('lol-accounts-changed',null);return null;
+          }
+          if(command==='lol_backup_get') return clone(lolSnapshot);
+          if(command==='lol_backup_sync'){
+            const f=window.backupFixture;
+            if(f.holdLolSync) await new Promise(resolve=>f.releaseLolSync=resolve);
+            if(f.failLolSync) throw Error('fixture LOL network failure');
+            lolSnapshot.queue=args.account?lolSnapshot.queue.filter(a=>a.account!==args.account):[];
+            lolSnapshot.state_version++;lolSnapshot.last_success_ms=Date.now();lolSnapshot.message='LOL 备份完成';
+            return clone(lolSnapshot);
+          }
+
           if(command === 'get_status') {
             const f = window.backupFixture;
             if(f.holdStatus) return new Promise(resolve => f.statusResolvers.push(resolve));
@@ -147,14 +215,6 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             publish(); emit('steam-accounts-changed', null);
             return clone(snapshot);
           }
-          if(command === 'backup_save') {
-            snapshot.config=clone(args.config); snapshot.message='fixture saved'; publish();
-            const saved=clone(snapshot);
-            // Background work publishes a newer snapshot before the save IPC returns.
-            snapshot.config.fingerprint='fixture-pinned-key'; snapshot.status='syncing';
-            snapshot.message='fixture background work'; publish();
-            return saved;
-          }
           if(command === 'backup_sync') {
             snapshot.status = 'syncing'; publish();
             await new Promise(resolve => setTimeout(resolve, 80));
@@ -187,13 +247,20 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       ['账号: {player} 密码: {P@ss---!}','player','P@ss---!'],['Steam账号：player，密码：P@ss!','player','P@ss!'],
       ['Account = player; Password = " a b "','player',' a b '],['密码: P@ss! 账号: player','player','P@ss!'],
       ['用户名 player 密码 Pass!1','player','Pass!1'],['user@example.test====P@ss!','user@example.test','P@ss!'],
+      ['账号:1234567890密码:fixture:secret','1234567890','fixture:secret'],
+      ['1234567890密码:fixture:secret','1234567890','fixture:secret'],
+      ['“账号：1234567890密码：fixture:密码:secret”','1234567890','fixture:密码:secret'],
+      ['"1234567890密码:fixture:secret"','1234567890','fixture:secret'],
+      ['‘1234567890密碼：fixture:secret’','1234567890','fixture:secret'],
+      ['accountpassword:fixture:secret','accountpassword','fixture:secret'],
       ['{"account":"player","password":" p : 123 "}','player',' p : 123 '],['player---Pass!1\r\n','player','Pass!1']
     ];
     for(const [text,account,password] of parseCases){
       assert.deepEqual(await page.evaluate(value=>parseLoginClipboard(value),text),{account,password});
     }
     for(const text of [null,'','ordinarytext','只有一段说明','player--','player---','player@@@@','---secret','player\npassword',
-      'https://example.test/page','C:\\folder\\file','user____name----pass']){
+      'https://example.test/page','"https://example.test/page"','C:\\folder\\file','user____name----pass',
+      '密码:fixture-secret','1234567890密码:','说明文本密码:fixture-secret']){
       assert.equal(await page.evaluate(value=>parseLoginClipboard(value),text),null);
     }
     assert.deepEqual(await page.evaluate(()=>parseLoginClipboard('user____name----pass',['user____name'])),
@@ -207,7 +274,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     }
     await fixtureClipboard('player----first-password');
     await page.locator('#recognizeLogin').waitFor({state:'visible'});
-    assert.equal(await page.locator('.add-row').evaluate(row=>row.scrollWidth<=row.clientWidth),true);
+    assert.equal(await page.locator('#page-steam .add-row').evaluate(row=>row.scrollWidth<=row.clientWidth),true);
     assert.equal(await page.locator('#recognizeLogin').isEnabled(),true);
     await page.locator('#recognizeLogin').click();
     await page.waitForFunction(()=>document.querySelector('#fUser').value==='player');
@@ -240,7 +307,6 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('#fUser').fill('');await page.locator('#fPass').fill('');
     console.log('PASS clipboard formats, button order/state, plaintext fill-only behavior and stale-read protection');
     await page.locator('#openBackup').click();
-    await page.locator('#backupQueueTab').click();
     const card = account => page.locator(`.backup-account[data-account="${account}"]`);
     async function assertFeedbackVisible(tone) {
       const feedback = page.locator('#backupFeedback');
@@ -390,28 +456,119 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.evaluate(() => progStop());
     console.log('PASS automatic NAS outcomes are visible, replace stale pinned results, and ignore duplicate/startup snapshots');
 
-    await page.locator('#backupConfigTab').click();
-    await page.locator('#backupHost').fill('updated.example.test');
-    assert.equal(await page.evaluate(() => backupDirty),true);
-    await page.locator('#backupSave').click();
-    await page.waitForFunction(() => !backupBusy);
-    assert.equal(await page.evaluate(() => backupDirty),false,'A successful stale save response must still clear saved draft state');
-    assert.equal(await page.locator('#backupHost').inputValue(),'updated.example.test');
-    assert.equal(await page.locator('#backupPassword').inputValue(),'fixture-nas-password','Sanitized events must never clear the saved NAS password form');
-    assert.equal(await page.evaluate(() => backupFingerprint),'fixture-pinned-key','The newer saved configuration wins over the stale save response');
-    assert.equal(await page.evaluate(() => backupSnapshot.status),'syncing');
-    await page.evaluate(() => {
-      const stale=structuredClone(window.backupFixture.snapshot); stale.state_version--;
-      stale.config.host='stale.example.test';stale.config.password='stale-fixture-password';
-      applyBackup(stale,true);
+    await page.locator('#backupOpenSettings').click();
+    await page.waitForFunction(()=>document.querySelector('#page-settings').classList.contains('show'));
+    await page.waitForFunction(()=>document.querySelector('#sharedBackupHost').value==='nas.example.test');
+    assert.equal(await page.locator('#backupMask').isVisible(),false,'Queue closes before the common settings dialog opens');
+    assert.equal(await page.locator('#backupHost,#lolBackupHost,#backupConfigTab,#lolBackupConfigTab').count(),0,'There is only one editable SFTP connection');
+    assert.equal(await page.locator('#sharedBackupMask [role="switch"],#sharedBackupSteamPath,#sharedBackupLolPath').count(),0,'Common settings contain no game destinations');
+    const destinationsBefore=await page.evaluate(()=>structuredClone(window.backupFixture.shared.games));
+    await page.evaluate(()=>{const f=window.backupFixture;f.shared.migration_warning='旧连接不一致，请确认公共连接后保存';f.shared.state_version++;f.emit('shared-backup-changed',null);});
+    await page.waitForFunction(()=>!document.querySelector('#sharedBackupMigration').hidden);
+    await page.locator('#sharedBackupHost').fill('updated.example.test');
+    assert.equal(await page.evaluate(()=>sharedBackupDirty),true);
+    await page.evaluate(()=>window.backupFixture.emit('shared-backup-changed',null));
+    await page.waitForFunction(()=>document.querySelector('#sharedBackupHost').value==='updated.example.test');
+    const savesBefore=await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='backup_connection_save').length);
+    await page.locator('#sharedBackupPort').fill('0');await page.locator('#sharedBackupSave').click();
+    assert.match(await page.locator('#sharedBackupFeedback').textContent(),/端口/);
+    await page.locator('#sharedBackupPort').fill('2022');
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='backup_connection_save').length),savesBefore);
+    await page.evaluate(()=>{window.backupFixture.holdSharedTest=true;});
+    await page.locator('#sharedBackupTest').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseSharedTest==='function');
+    assert.equal(await page.locator('#sharedBackupSave').isDisabled(),true);
+    assert.equal(await page.locator('#sharedBackupPassword').isDisabled(),true);
+    await page.evaluate(()=>sharedBackupAction('test'));
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='backup_connection_test').length),1);
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdSharedTest=false;f.releaseSharedTest();});
+    await page.waitForFunction(()=>document.querySelector('#sharedBackupTestLight').dataset.state==='passed');
+    await page.locator('#sharedBackupUser').fill('fixture-updated');
+    assert.equal(await page.locator('#sharedBackupTestLight').getAttribute('data-state'),'untested','Changing connection credentials invalidates the connection test');
+    await page.evaluate(()=>{window.backupFixture.failSharedTest=true;});await page.locator('#sharedBackupTest').click();
+    await page.waitForFunction(()=>document.querySelector('#sharedBackupTestLight').dataset.state==='failed');
+    await page.evaluate(()=>{window.backupFixture.failSharedTest=false;window.backupFixture.failSharedSave=true;});
+    await page.locator('#sharedBackupSave').click();
+    await page.waitForFunction(()=>document.querySelector('#sharedBackupFeedback').textContent.includes('fixture shared save failure'));
+    assert.equal(await page.evaluate(()=>sharedBackupDirty),true,'Failed saves preserve the common draft');
+    await page.evaluate(()=>{window.backupFixture.failSharedSave=false;});await page.locator('#sharedBackupSave').click();
+    await page.waitForFunction(()=>!sharedBackupBusy);
+    assert.equal(await page.evaluate(()=>sharedBackupDirty),false);
+    assert.equal(await page.locator('#sharedBackupHost').inputValue(),'updated.example.test');
+    assert.equal(await page.locator('#sharedBackupPassword').inputValue(),'fixture-nas-password','Notifications fetch full settings and cannot erase the stored connection password');
+    assert.equal(await page.evaluate(()=>sharedBackupFingerprint),'fixture-pinned-key','Newer common configuration wins over a stale save response');
+    assert.equal(await page.locator('#sharedBackupMigration').isHidden(),true);
+    await page.evaluate(()=>{const stale=structuredClone(window.backupFixture.shared);stale.state_version--;stale.connection.host='stale.example.test';applySharedBackup(stale,true);});
+    assert.equal(await page.locator('#sharedBackupHost').inputValue(),'updated.example.test');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.snapshot.config.host),'updated.example.test');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.lolSnapshot.config.host),'updated.example.test');
+    await page.locator('#sharedBackupMask .modal-body').evaluate(n=>n.scrollTop=0);
+    await page.screenshot({path:path.resolve(__dirname,'../target/shared-backup-settings-ui.png'),animations:'disabled'});
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.shared.games),destinationsBefore,'Saving common connection leaves both game settings unchanged');
+    await page.locator('#closeBackupSettings').click();
+    await page.screenshot({path:path.resolve(__dirname,'../target/backup-settings-entry-ui.png'),animations:'disabled'});
+    await page.locator('#nav-steam').click();await page.locator('#openBackup').click();
+    await page.waitForFunction(()=>document.querySelector('#backupPath').value==='/backup/accounts.txt');
+    assert.equal(await page.locator('#backupMask #backupEnabled').count(),1);
+    assert.equal(await page.locator('#backupMask #lolBackupPath,#backupMask #sharedBackupHost').count(),0);
+    const connectionBefore=await page.evaluate(()=>structuredClone(window.backupFixture.shared.connection));
+    const lolBefore=await page.evaluate(()=>structuredClone(window.backupFixture.shared.games.lol));
+    await page.locator('#backupPath').fill('/backup/lol-accounts.txt');await page.locator('#backupTargetSave').click();
+    assert.match(await page.locator('#backupTargetFeedback').textContent(),/不同的备份文件/);
+    await page.locator('#backupPath').fill('relative.txt');await page.locator('#backupTargetSave').click();
+    assert.match(await page.locator('#backupTargetFeedback').textContent(),/绝对路径/);
+    await page.locator('#backupPath').fill('/backup/steam-draft.txt');
+    const syncBefore=await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='backup_sync').length);
+    await page.evaluate(()=>backupAction('sync'));
+    assert.match(await page.locator('#backupFeedback').textContent(),/请先保存/);
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='backup_sync').length),syncBefore);
+    await page.evaluate(()=>{const f=window.backupFixture;f.emit('shared-backup-changed',null);});
+    assert.equal(await page.locator('#backupPath').inputValue(),'/backup/steam-draft.txt');
+    await page.evaluate(()=>{window.backupFixture.holdDestinationTest=true;});
+    await page.locator('#backupTargetTest').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseDestinationTest==='function');
+    assert.equal(await page.locator('#backupTargetSave').isDisabled(),true);
+    await page.evaluate(()=>destinationAction('steam','test'));
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='backup_destination_test').length),1);
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdDestinationTest=false;f.releaseDestinationTest();});
+    await page.waitForFunction(()=>document.querySelector('#backupTargetTestLight').dataset.state==='passed');
+    await page.evaluate(()=>{const f=window.backupFixture;f.shared.connection.host='changed.example.test';f.shared.state_version++;f.emit('shared-backup-changed',null);});
+    await page.waitForFunction(()=>document.querySelector('#backupTargetTestLight').dataset.state==='untested');
+    assert.equal(await page.locator('#backupPath').inputValue(),'/backup/steam-draft.txt','Connection updates preserve the game draft but clear its old test');
+    await page.evaluate(connection=>{const f=window.backupFixture;f.shared.connection=connection;f.shared.state_version++;f.emit('shared-backup-changed',null);},connectionBefore);
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdDestinationTest=true;f.releaseDestinationTest=null;});
+    await page.locator('#backupTargetTest').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseDestinationTest==='function');
+    await page.evaluate(()=>{const f=window.backupFixture;f.shared.connection.host='late-change.example.test';f.shared.state_version++;f.emit('shared-backup-changed',null);});
+    await page.waitForFunction(()=>sharedBackupSnapshot.connection.host==='late-change.example.test');
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdDestinationTest=false;f.releaseDestinationTest();});
+    await page.waitForFunction(()=>!destinationForms.steam.busy);
+    assert.equal(await page.locator('#backupTargetTestLight').getAttribute('data-state'),'untested','A late result cannot validate a different saved connection');
+    await page.evaluate(connection=>{const f=window.backupFixture;f.shared.connection=connection;f.shared.state_version++;f.emit('shared-backup-changed',null);},connectionBefore);
+    await page.evaluate(()=>{window.backupFixture.failDestinationTest=true;});await page.locator('#backupTargetTest').click();
+    await page.waitForFunction(()=>document.querySelector('#backupTargetTestLight').dataset.state==='failed');
+    await page.evaluate(()=>{window.backupFixture.failDestinationTest=false;window.backupFixture.failDestinationSave=true;});
+    await page.locator('#backupTargetSave').click();
+    await page.waitForFunction(()=>document.querySelector('#backupTargetFeedback').textContent.includes('fixture destination save failure'));
+    assert.equal(await page.evaluate(()=>destinationForms.steam.dirty),true);
+    await page.locator('#backupPath').fill('/backup/accounts.txt');
+    await page.evaluate(()=>{
+      window.backupFixture.failDestinationSave=false;
+      document.querySelector('#sharedBackupHost').value='unsaved-connection.example.test';markSharedBackupDirty();
+      const path=document.querySelector('#lolBackupPath');path.value='/backup/unsaved-lol.txt';path.dispatchEvent(new Event('input'));
     });
-    assert.equal(await page.locator('#backupHost').inputValue(),'updated.example.test','A delayed full query cannot overwrite the current form');
-    assert.equal(await page.locator('#backupPassword').inputValue(),'fixture-nas-password');
-    await page.evaluate(() => {const f=window.backupFixture;f.snapshot.status='idle';f.publish();});
-    await page.locator('#backupQueueTab').click();
-    console.log('PASS configuration save race keeps the latest snapshot and clears dirty state');
+    await page.locator('#backupTargetSave').click();
+    await page.waitForFunction(()=>!destinationForms.steam.busy&&!destinationForms.steam.dirty);
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.shared.connection),connectionBefore,'Game save never commits the common draft');
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.shared.games.lol),lolBefore,'Steam save never commits the LOL draft');
+    assert.equal(await page.locator('#sharedBackupHost').inputValue(),'unsaved-connection.example.test');
+    assert.equal(await page.locator('#lolBackupPath').inputValue(),'/backup/unsaved-lol.txt');
+    await page.evaluate(()=>{sharedBackupDirty=false;destinationForms.lol.dirty=false;applySharedBackup(window.backupFixture.shared,true);});
+    await page.locator('#backupMask .modal-body').evaluate(n=>n.scrollTop=0);
+    await page.screenshot({path:path.resolve(__dirname,'../target/steam-backup-settings-ui.png'),animations:'disabled'});
+    console.log('PASS scoped backup settings: common connection only, independent game destinations, scoped IPC, test/save failures, draft isolation, stale responses and connection invalidation');
 
-    await page.screenshot({ path: path.resolve(__dirname, '../target/backup-sync-ui.png') });
+    await page.screenshot({ path: path.resolve(__dirname, '../target/backup-sync-ui.png'),animations:'disabled' });
     await page.locator('#closeBackup').click();
     await page.evaluate(() => {
       const f = window.backupFixture;
@@ -916,6 +1073,184 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     });
     assert.match(await page.locator('#updateStatus').textContent(),/打开所在文件夹失败/);
     assert.match(await page.locator('#updateStatus').textContent(),/Data\\updates/);
+    // LOL credentials are visible, selectable text; edits and backups stay separate from Steam.
+    await page.evaluate(()=>location.hash='lol');
+    await page.waitForFunction(()=>document.querySelector('#page-lol').classList.contains('show'));
+    assert.equal(await page.locator('#page-lol .cover-toggle').count(),0);
+    assert.equal(await page.locator('#lolBtn').evaluate(n=>n.getBoundingClientRect().width),148);
+    async function fixtureLolClipboard(text,fail=false){
+      await page.evaluate(async ({text,fail})=>{
+        const f=window.backupFixture;f.clipboardText=text;f.clipboardSequence++;f.clipboardFail=fail;
+        await refreshLolLoginClipboard(true);
+      },{text,fail});
+    }
+    const lolSaveCount=await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='lol_account_save').length);
+    assert.equal(await page.locator('#lolSaveAccount').evaluate(n=>n.previousElementSibling.id),'recognizeLolAccount');
+    await fixtureLolClipboard('123456----Visible password!');
+    await page.locator('#recognizeLolAccount').waitFor({state:'visible'});
+    assert.equal(await page.locator('#lolAccountForm').evaluate(n=>n.scrollWidth<=n.clientWidth),true);
+    await page.locator('#recognizeLolAccount').click();
+    await page.waitForFunction(()=>document.querySelector('#lolUser').value==='123456');
+    assert.equal(await page.locator('#lolPass').inputValue(),'Visible password!');
+    assert.equal(await page.locator('#lolPass').getAttribute('type'),'text');
+    for(const text of ['"账号:1234567890密码:fixture:secret"','“1234567890密码：fixture:secret”']){
+      await fixtureLolClipboard(text);
+      await page.locator('#recognizeLolAccount').click();
+      await page.waitForFunction(()=>document.querySelector('#lolUser').value==='1234567890');
+      assert.equal(await page.locator('#lolPass').inputValue(),'fixture:secret','Password-label recognition preserves the complete password');
+    }
+    await page.evaluate(()=>{const f=window.backupFixture;f.clipboardText='654321:::new password';f.clipboardSequence++;});
+    await page.locator('#recognizeLolAccount').click();
+    await page.waitForFunction(()=>document.querySelector('#lolUser').value==='654321');
+    assert.equal(await page.locator('#lolPass').inputValue(),'new password','LOL click rereads the current clipboard');
+    await page.evaluate(()=>{const f=window.backupFixture;f.clipboardText='not_credentials';f.clipboardSequence++;});
+    await page.locator('#recognizeLolAccount').click();
+    await page.waitForFunction(()=>document.querySelector('#recognizeLolAccount').hidden);
+    assert.equal(await page.locator('#lolPass').inputValue(),'new password','Invalid clipboard does not erase a LOL draft');
+    await fixtureLolClipboard('123456----clipboard draft');
+    await page.evaluate(()=>{delete window.backupFixture.releaseClipboard;window.backupFixture.holdClipboard=true;});
+    await page.locator('#recognizeLolAccount').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseClipboard==='function');
+    assert.equal(await page.locator('#recognizeLolAccount').isDisabled(),true);
+    await page.locator('#lolPass').fill('manual draft');
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdClipboard=false;f.releaseClipboard();delete f.releaseClipboard;});
+    await page.waitForFunction(()=>!document.querySelector('#recognizeLolAccount').disabled);
+    assert.equal(await page.locator('#lolPass').inputValue(),'manual draft','A delayed read cannot overwrite manual typing');
+    await page.evaluate(()=>window.backupFixture.holdClipboard=true);
+    await page.locator('#recognizeLolAccount').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseClipboard==='function');
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdClipboard=false;location.hash='steam';});
+    await page.waitForFunction(()=>document.querySelector('#page-steam').classList.contains('show'));
+    await page.evaluate(()=>{window.backupFixture.releaseClipboard();delete window.backupFixture.releaseClipboard;});
+    await page.waitForFunction(()=>!lolRecognizeBusy);
+    assert.equal(await page.locator('#lolPass').inputValue(),'manual draft','Navigating away cancels the pending LOL fill');
+    await page.evaluate(()=>location.hash='lol');
+    await page.waitForFunction(()=>document.querySelector('#page-lol').classList.contains('show'));
+    await fixtureLolClipboard('123456----password',true);
+    assert.equal(await page.locator('#recognizeLolAccount').isHidden(),true);
+    await fixtureLolClipboard('123456----password');
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='lol_account_save').length),lolSaveCount,'Recognition never saves or starts backup');
+    await page.screenshot({path:path.resolve(__dirname,'../target/lol-recognition-ui.png'),animations:'disabled'});
+    console.log('PASS LOL clipboard recognition: numeric accounts, fill-only, latest-read, errors, manual drafts and tab isolation');
+    await page.locator('#lolUser').fill('lol_fixture');await page.locator('#lolPass').fill('Visible<&>password');
+    await page.locator('#lolSaveAccount').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#lolCards .lol-account').length===1);
+    const lolCard=page.locator('#lolCards .lol-account').first();
+    assert.match(await lolCard.textContent(),/lol_fixture/);assert.match(await lolCard.textContent(),/Visible<&>password/);
+    assert.equal(await lolCard.locator('.acct-info').evaluate(n=>getComputedStyle(n).userSelect),'text');
+    assert.equal(await lolCard.locator('.value').last().evaluate(n=>n.children.length),0,'Passwords remain plain text, never HTML');
+    await lolCard.click({button:'right'});assert.equal(await page.locator('#accountMenu').isVisible(),false);
+    await lolCard.locator('.acct-favorite').click();
+    await page.waitForFunction(()=>document.querySelector('#lolCards .acct-favorite').getAttribute('aria-pressed')==='true');
+    await fixtureLolClipboard('123456----late clipboard');
+    await page.evaluate(()=>{delete window.backupFixture.releaseClipboard;window.backupFixture.holdClipboard=true;});
+    await page.locator('#recognizeLolAccount').click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseClipboard==='function');
+    await lolCard.getByRole('button',{name:'编辑 lol_fixture'}).click();
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdClipboard=false;f.releaseClipboard();delete f.releaseClipboard;});
+    await page.waitForFunction(()=>!lolRecognizeBusy);
+    assert.equal(await page.locator('#lolUser').evaluate(n=>n.readOnly),true);
+    assert.equal(await page.locator('#lolPass').inputValue(),'Visible<&>password','A late recognition cannot replace the selected account editor');
+    assert.equal(await page.locator('#recognizeLolAccount').isHidden(),true,'Editing an existing LOL account hides clipboard recognition');
+    await fixtureLolClipboard('different----must-not-replace');
+    assert.equal(await page.locator('#lolUser').inputValue(),'lol_fixture');
+    assert.equal(await page.locator('#recognizeLolAccount').isHidden(),true);
+    await page.locator('#lolPass').fill('Updated visible password');
+    await page.evaluate(()=>{window.backupFixture.emit('lol-accounts-changed',null);});
+    assert.equal(await page.locator('#lolPass').inputValue(),'Updated visible password','Polling must preserve the draft');
+    await page.locator('#lolSaveAccount').click();
+    await page.waitForFunction(()=>document.querySelector('#lolCards').textContent.includes('Updated visible password'));
+    assert.equal(await lolCard.locator('.acct-favorite').getAttribute('aria-pressed'),'true');
+    await page.evaluate(()=>window.backupFixture.failLolAccount=true);
+    await lolCard.locator('.acct-favorite').click();
+    await page.waitForFunction(()=>document.querySelector('#tkTxt').textContent.includes('fixture LOL save failure'));
+    assert.equal(await lolCard.locator('.acct-favorite').getAttribute('aria-pressed'),'true','Failed writes never change the shown favorite');
+    await page.evaluate(()=>window.backupFixture.failLolAccount=false);
+    await lolCard.locator('.acct-favorite').click();
+    await page.waitForFunction(()=>document.querySelector('#lolCards .acct-favorite').getAttribute('aria-pressed')==='false');
+    const lolBeforeFill=await page.evaluate(()=>({
+      accounts:structuredClone(window.backupFixture.lolAccounts),backup:structuredClone(window.backupFixture.lolSnapshot),
+      saves:window.backupFixture.calls.filter(c=>c.command==='lol_account_save').length,
+      syncs:window.backupFixture.calls.filter(c=>c.command==='lol_backup_sync').length,copied:window.backupFixture.copied
+    }));
+    await page.locator('#lolUser').fill('unsaved_lol_fixture');await page.locator('#lolPass').fill('Unsaved fixture password');
+    await page.mouse.move(10,10);
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('#lolCards .lol-fill-action')).opacity==='0');
+    assert.equal(await lolCard.locator('.lol-fill-action').evaluate(n=>getComputedStyle(n).pointerEvents),'none');
+    await lolCard.hover();
+    await page.waitForFunction(()=>{const style=getComputedStyle(document.querySelector('#lolCards .lol-fill-action'));return style.opacity==='1'&&style.transform==='matrix(1, 0, 0, 1, 0, 0)';});
+    assert.equal(await lolCard.locator('.lol-fill-action').evaluate(n=>getComputedStyle(n).transform),'matrix(1, 0, 0, 1, 0, 0)','Fill slides left into the row');
+    await page.mouse.move(10,10);await lolCard.focus();
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('#lolCards .lol-fill-action')).opacity==='1');
+    assert.equal(await lolCard.locator('.lol-fill-action').evaluate(n=>getComputedStyle(n).pointerEvents),'auto','Keyboard focus also exposes fill');
+    await page.evaluate(()=>{window.backupFixture.holdLolFill=true;});
+    await lolCard.getByRole('button',{name:'填入 WeGame lol_fixture'}).click();
+    await page.waitForFunction(()=>typeof window.backupFixture.releaseLolFill==='function');
+    await page.mouse.move(10,10);await page.locator('#nav-lol').focus();
+    assert.equal(await lolCard.locator('.lol-fill').textContent(),'填入中…');
+    assert.equal(await lolCard.locator('.lol-fill-action').evaluate(n=>getComputedStyle(n).opacity),'1','In-flight fill stays visible after hover and focus leave');
+    assert.equal(await page.locator('#lolCards button:not(:disabled)').count(),0);
+    assert.equal(await page.locator('#lolSaveAccount').isDisabled(),true);
+    await page.evaluate(()=>{fillLolWeGame(lolAccounts[0]);lolAccountAction('favorite',lolAccounts[0]);renderLolAccounts();});
+    assert.equal(await lolCard.locator('.lol-fill').isDisabled(),true);
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='lol_account_fill_wegame').map(c=>c.args)),[{accountName:'lol_fixture'}],'Fill sends only the saved account key and rejects duplicate requests');
+    await page.evaluate(()=>{const f=window.backupFixture;f.holdLolFill=false;f.releaseLolFill();delete f.releaseLolFill;});
+    await page.waitForFunction(()=>!lolAccountBusy);
+    assert.match(await page.locator('#tkTxt').textContent(),/已发送填入，请检查 WeGame 后手动登录/);
+    assert.equal(await page.locator('#lolUser').inputValue(),'unsaved_lol_fixture');
+    assert.equal(await page.locator('#lolPass').inputValue(),'Unsaved fixture password');
+    await page.evaluate(()=>{window.backupFixture.failLolFill=true;});
+    await lolCard.hover();await lolCard.getByRole('button',{name:'填入 WeGame lol_fixture'}).click();
+    await page.waitForFunction(()=>document.querySelector('#tkTxt').textContent.includes('fixture WeGame password input unavailable'));
+    assert.equal(await lolCard.locator('.lol-fill').isEnabled(),true,'Failure releases the fill guard for retry');
+    assert.deepEqual(await page.evaluate(()=>({
+      accounts:structuredClone(window.backupFixture.lolAccounts),backup:structuredClone(window.backupFixture.lolSnapshot),
+      saves:window.backupFixture.calls.filter(c=>c.command==='lol_account_save').length,
+      syncs:window.backupFixture.calls.filter(c=>c.command==='lol_backup_sync').length,copied:window.backupFixture.copied
+    })),lolBeforeFill,'Fill does not save accounts, sync backups or copy credentials');
+    await page.evaluate(()=>{window.backupFixture.failLolFill=false;});
+    await page.locator('#lolUser').fill('');await page.locator('#lolPass').fill('');
+    await lolCard.hover();await page.screenshot({path:path.resolve(__dirname,'../target/lol-fill-hover-ui.png'),animations:'disabled'});
+    console.log('PASS LOL WeGame fill: hover/focus slide, persistent busy action, account-key-only IPC, reentry guard, manual login and failure recovery');
+    await page.evaluate(()=>{
+      const f=window.backupFixture;f.lolAccounts.push(...Array.from({length:7},(_,i)=>({account_name:'lol_example_'+i,password:'visible-password-'+i,favorite:i===0})));
+      f.lolSnapshot.queue=f.lolAccounts.map(a=>({account:a.account_name}));f.lolSnapshot.state_version++;
+      f.emit('lol-accounts-changed',null);f.emit('guard-stats',{count:12,elapsed_ms:75000});
+    });
+    await page.waitForFunction(()=>document.querySelectorAll('#lolCards .lol-account').length===8);
+    assert.equal(await page.locator('#lolCards').evaluate(n=>n.scrollHeight>n.clientHeight),true);
+    assert.equal(await page.locator('#lolCards').evaluate(n=>n.getBoundingClientRect().bottom<=document.querySelector('#ticker').getBoundingClientRect().top),true);
+    await page.screenshot({path:path.resolve(__dirname,'../target/lol-accounts-ui.png')});
+    await page.locator('#openLolBackup').click();
+    await page.waitForFunction(()=>document.querySelector('#lolBackupPath').value==='/backup/lol-accounts.txt');
+    const steamConfig=await page.evaluate(()=>structuredClone(window.backupFixture.snapshot.config));
+    await page.locator('#lolBackupPath').fill('/backup/lol-final.txt');
+    await page.locator('#lolBackupEnabled').click();
+    await page.locator('#lolBackupTargetTest').click();
+    await page.waitForFunction(()=>document.querySelector('#lolBackupTargetTestLight').dataset.state==='passed');
+    await page.locator('#lolBackupTargetSave').click();
+    await page.waitForFunction(()=>window.backupFixture.lolSnapshot.config.remote_path==='/backup/lol-final.txt');
+    assert.equal(await page.evaluate(()=>window.backupFixture.lolSnapshot.config.enabled),true);
+    assert.deepEqual(await page.evaluate(()=>window.backupFixture.snapshot.config),steamConfig,'Updating LOL target does not change the Steam target or common connection');
+    await page.waitForFunction(()=>!destinationForms.lol.busy);
+    await page.locator('#lolBackupMask .modal-body').evaluate(n=>n.scrollTop=0);
+    await page.screenshot({path:path.resolve(__dirname,'../target/lol-backup-settings-ui.png'),animations:'disabled'});
+    await page.waitForFunction(()=>document.querySelectorAll('#lolBackupQueueList .backup-account').length===8);
+    await page.screenshot({path:path.resolve(__dirname,'../target/lol-backup-queue-ui.png'),animations:'disabled'});
+    await page.evaluate(()=>window.backupFixture.failLolSync=true);
+    await page.locator('#lolBackupQueueList .backup-account').first().getByRole('button',{name:'同步',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#lolBackupFeedback').textContent.includes('fixture LOL network failure'));
+    assert.equal(await page.locator('#lolBackupQueueList .backup-account').count(),8,'A failed sync keeps the queue');
+    await page.evaluate(()=>window.backupFixture.failLolSync=false);
+    await page.locator('#lolBackupQueueList .backup-account').first().getByRole('button',{name:'同步',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#lolBackupQueueList .backup-account').length===7);
+    assert.equal(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='lol_backup_sync').at(-1).args.account),'lol_fixture');
+    await page.locator('#lolBackupSync').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#lolBackupQueueList .backup-account').length===0);
+    await page.locator('#closeLolBackup').click();
+    await lolCard.getByRole('button',{name:'删除 lol_fixture'}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#lolCards .lol-account').length===7);
+    console.log('PASS LOL plaintext accounts: add/edit/delete, favorites, independent targets and single/all sync, failures, overflow layout');
     await page.evaluate(()=>{
       const ids=[...document.querySelector('.rail').children].map(node=>node.id).filter(Boolean);
       localStorage.setItem('gr_nav_order',JSON.stringify(['nav-logs',...ids.filter(id=>id!=='nav-logs')]));

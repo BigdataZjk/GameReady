@@ -1,6 +1,6 @@
 [package]
 name = "gameready"
-version = "0.1.19"
+version = "0.1.23"
 description = "GameReady - 一键就绪 · 开局即战"
 edition = "2021"
 
@@ -34,6 +34,9 @@ windows = { version = "0.58", features = [
   "Win32_System_Memory",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Controls",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Graphics_Gdi",
   "Win32_Foundation",
 ] }
 # 进程监听

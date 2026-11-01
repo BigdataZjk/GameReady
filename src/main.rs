@@ -28,7 +28,10 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
 use windows::Win32::System::Threading::{GetCurrentProcess, WaitForSingleObject, INFINITE};
 
 mod backup;
+mod backup_settings;
 mod account_store;
+mod lol_accounts;
+mod wegame;
 mod update;
 mod vdf {
 //! Steam VDF parsing, account records and preference merging.
@@ -326,6 +329,22 @@ fn main() {
             commands::backup_test,
             commands::backup_sync,
             commands::backup_save_password,
+            backup_settings::shared_backup_get,
+            backup_settings::shared_backup_save,
+            backup_settings::shared_backup_test,
+            backup_settings::backup_connection_save,
+            backup_settings::backup_connection_test,
+            backup_settings::backup_destination_save,
+            backup_settings::backup_destination_test,
+            lol_accounts::lol_accounts_list,
+            lol_accounts::lol_account_save,
+            lol_accounts::lol_account_delete,
+            lol_accounts::lol_account_favorite,
+            lol_accounts::lol_account_fill_wegame,
+            lol_accounts::lol_backup_get,
+            lol_accounts::lol_backup_save,
+            lol_accounts::lol_backup_test,
+            lol_accounts::lol_backup_sync,
         ])
         .setup(|app| {
             // ③ 系统托盘（关闭到托盘模式的找回入口：双击/菜单"显示主窗口"，菜单"退出"）
@@ -352,7 +371,9 @@ fn main() {
 
             // ④ 进程活跃监听（R1 绿点）：后台轮询 LOL / Steam 客户端，变化时推 "game-active"
             spawn(app.handle().clone());
+            backup_settings::start(app.handle().clone());
             backup::start(app.handle().clone());
+            lol_accounts::start(app.handle().clone());
             update::start(app.handle().clone());
             Ok(())
         })
@@ -3078,6 +3099,8 @@ mod regression_tests {
         let result = write_all(&dir, PackScope::Lol, None);
         assert_eq!(result.len(), 5);
         assert!(result.iter().all(|r| r.ok && r.err.is_none()));
+        let game = FILES.iter().find(|p| p.scope == PackScope::Lol && p.rel.ends_with("game.cfg")).unwrap();
+        assert!(String::from_utf8_lossy(game.bytes).contains("FrameCapType=2"));
         let expected = chrono::Local.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).single().unwrap().timestamp();
         for pack in FILES.iter().filter(|p| p.scope == PackScope::Lol) {
             let path = dir.join(pack.rel);

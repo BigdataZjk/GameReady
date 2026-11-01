@@ -15,15 +15,17 @@ use sha2::{Digest, Sha256};
 use tauri::Emitter;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 use uuid::Uuid;
+use crate::backup_settings::{self, Game, Resolved};
 
 const MAX_REMOTE_BYTES: usize = 8 * 1024 * 1024;
 const CHUNK: usize = 16 * 1024;
 const REQUEST_TIMEOUT: u64 = 10;
 static STORE_LOCK: Mutex<()> = Mutex::new(());
+// 两种游戏的 NAS 目标保存串行化，避免同时改配置时各自校验通过后指向同一文件。
+pub(crate) static TRANSFER_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 static SYNC_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 static WAKE: LazyLock<Notify> = LazyLock::new(Notify::new);
 static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
-static TESTED_CONFIG: Mutex<Option<Config>> = Mutex::new(None);
 static CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
     let machine: String = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
         .open_subkey("SOFTWARE\\Microsoft\\Cryptography")
@@ -69,6 +71,10 @@ struct Pending {
 #[serde(default)]
 struct Store {
     config: Config,
+    shared_target: String,
+    shared_generation: u64,
+    #[serde(skip)]
+    legacy_config: Option<Config>,
     verified: bool,
     credentials_seeded: bool,
     confirmed_credentials: BTreeMap<String, String>,
@@ -87,7 +93,7 @@ struct Store {
 
 impl Default for Store {
     fn default() -> Self {
-        Self { config: Config::default(), verified: false, credentials_seeded: false, confirmed_credentials: BTreeMap::new(), synced_credentials: BTreeMap::new(), revision: 0, state_version: 0, client_id: Uuid::new_v4().to_string(),
+        Self { config: Config::default(), shared_target: String::new(), shared_generation: 0, legacy_config: None, verified: false, credentials_seeded: false, confirmed_credentials: BTreeMap::new(), synced_credentials: BTreeMap::new(), revision: 0, state_version: 0, client_id: Uuid::new_v4().to_string(),
             queue: Vec::new(), status: "disabled".into(), message: "自动备份未开启".into(),
             last_success_ms: None, failures: 0, blocked: false, next_retry_ms: 0 }
     }
@@ -190,6 +196,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(test)]
     fn accept_connection_test(&mut self, revision: u64, tested: &Config) -> bool {
         if self.revision != revision || !same_connection(&self.config, tested) { return false; }
         self.verified = true;
@@ -224,12 +231,12 @@ impl Store {
 pub struct Error {
     pub code: String,
     pub message: String,
-    retryable: bool,
+    pub(crate) retryable: bool,
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn error(code: &str, message: &str, retryable: bool) -> Error {
+pub(crate) fn error(code: &str, message: &str, retryable: bool) -> Error {
     Error { code: code.into(), message: message.into(), retryable }
 }
 
@@ -249,21 +256,80 @@ fn write_store(path: &Path, store: &Store) -> Result<()> {
         .map_err(|message| error("local_error", &message, false))
 }
 
+fn apply_shared(store: &mut Store, shared: Resolved) -> bool {
+    if shared.suspended {
+        // 冲突连接在用户选定之前只暂停运行，不销毁旧连接或队列。
+        store.legacy_config = Some(store.config.clone()); store.config = shared.config; store.verified = false;
+        store.status = "config_conflict".into(); store.message = "公共备份设置需要确认，账号和待同步记录已保留".into();
+        return false;
+    }
+    let changed = if store.shared_target.is_empty() { !backup_settings::same_target(&store.config, &shared.config) }
+        else { store.shared_target != shared.digest };
+    let updated = changed || store.shared_generation != shared.generation || store.config.enabled != shared.config.enabled
+        || store.config.remote_path != shared.config.remote_path || store.verified != shared.verified
+        || !store.config.host.is_empty() || !store.config.password.is_empty() || !store.config.username.is_empty() || !store.config.fingerprint.is_empty();
+    if changed { store.synced_credentials.clear(); store.credentials_seeded = false; }
+    let config_changed = changed || store.shared_generation != shared.generation;
+    if config_changed {
+        store.revision = store.revision.saturating_add(1);
+    }
+    if config_changed || (!store.verified && shared.verified) {
+        store.failures = 0; store.blocked = false; store.next_retry_ms = 0;
+        if config_changed || store.status != "syncing" {
+            store.status = if shared.config.enabled { "pending" } else { "disabled" }.into();
+            store.message = "公共备份配置已应用".into();
+        }
+    }
+    store.config = shared.config; store.shared_target = shared.digest; store.shared_generation = shared.generation;
+    store.verified = shared.verified; store.legacy_config = None;
+    if updated { store.state_version = store.state_version.saturating_add(1); }
+    updated
+}
+fn write_runtime_store(path: &Path, store: &Store) -> Result<()> {
+    let mut value = serde_json::to_value(store).map_err(|_| error("local_error", "备份数据序列化失败", false))?;
+    if let Some(legacy) = &store.legacy_config { value["config"] = serde_json::to_value(legacy).map_err(|_| error("local_error", "旧备份配置保存失败", false))?; }
+    else {
+        // 显式空值防止 account_store 的未知字段保留逻辑把旧凭据补回。
+        for name in ["host", "username", "password", "fingerprint"] { value["config"][name] = serde_json::Value::String(String::new()); }
+        value["config"]["port"] = serde_json::json!(2022);
+    }
+    crate::account_store::write_backup(path, &value).map_err(|message| error("local_error", &message, false))
+}
+
 fn edit<T>(f: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let path = crate::creds_path();
     let mut store = read_store(&path)?;
+    apply_shared(&mut store, backup_settings::resolved(Game::Steam)?);
     store.client_id = CLIENT_ID.clone();
     store.state_version = store.state_version.saturating_add(1);
     let value = f(&mut store)?;
-    write_store(&path, &store)?;
+    write_runtime_store(&path, &store)?;
     publish(&store);
     Ok(value)
+}
+
+// 本地凭据操作不能因 NAS 配置损坏而失败；仍严格返回本地账号存储错误。
+fn edit_local_at<T>(path: &Path, resolve: impl FnOnce() -> Option<Resolved>, action: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut store = read_store(path)?;
+    let shared = resolve();
+    let resolved = shared.is_some();
+    if let Some(shared) = shared { apply_shared(&mut store, shared); }
+    let result = action(&mut store)?;
+    store.state_version = store.state_version.saturating_add(1);
+    if resolved { write_runtime_store(path, &store)?; publish(&store); }
+    else { write_store(path, &store)?; }
+    Ok(result)
+}
+fn edit_local<T>(action: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
+    edit_local_at(&crate::creds_path(), || backup_settings::resolved(Game::Steam).ok(), action)
 }
 
 fn load() -> Result<Store> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut store = read_store(&crate::creds_path())?;
+    if apply_shared(&mut store, backup_settings::resolved(Game::Steam)?) { write_runtime_store(&crate::creds_path(), &store)?; }
     // 同一 Data 配置分发到不同电脑时，仍使用各设备独立的远程锁身份。
     store.client_id = CLIENT_ID.clone();
     Ok(store)
@@ -286,7 +352,8 @@ pub fn login_backup_note(account: &str, password: Option<&str>) -> Option<String
     }
 }
 
-pub fn credentials_changed() -> Result<()> { edit(|_| Ok(())) }
+pub fn credentials_changed() -> Result<()> { edit_local(|_| Ok(())) }
+pub(crate) fn wake_shared_settings() { WAKE.notify_one(); }
 
 /// 和备份快照写回串行删除，且使正在上传的旧批次失效，防止回执重新创建已删账号。
 pub fn remove_local_account(account: &str) -> Result<()> {
@@ -302,12 +369,13 @@ pub fn remove_local_account(account: &str) -> Result<()> {
     Ok(())
 }
 
-fn same_connection(a: &Config, b: &Config) -> bool {
+#[cfg(test)]
+pub(crate) fn same_connection(a: &Config, b: &Config) -> bool {
     a.host == b.host && a.port == b.port && a.username == b.username
         && a.password == b.password && a.remote_path == b.remote_path
 }
 
-fn validate_config(config: &Config) -> Result<()> {
+pub(crate) fn validate_config(config: &Config) -> Result<()> {
     if config.host.is_empty() || config.host.contains(['/', '\\', '@']) || config.host.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(error("config_error", "请输入服务器域名或 IP，不要包含协议或路径", false));
     }
@@ -322,46 +390,13 @@ fn validate_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub fn save(mut config: Config) -> Result<Snapshot> {
-    config.host = config.host.trim().to_string();
-    config.username = config.username.trim().to_string();
-    config.remote_path = config.remote_path.trim().to_string();
-    if config.enabled { validate_config(&config)?; }
-    let tested = TESTED_CONFIG.lock().unwrap_or_else(|p| p.into_inner()).take();
-    let snapshot = edit(|s| {
-        // 同一服务器已经记录的密钥不能被空值或旧的前端快照清掉。
-        if config.host == s.config.host && config.port == s.config.port {
-            if !s.config.fingerprint.is_empty() { config.fingerprint = s.config.fingerprint.clone(); }
-        } else {
-            config.fingerprint = tested.as_ref()
-                .filter(|c| c.host == config.host && c.port == config.port)
-                .map(|c| c.fingerprint.clone()).unwrap_or_default();
-        }
-        s.verified = (s.verified && same_connection(&s.config, &config))
-            || tested.as_ref().is_some_and(|c| same_connection(c, &config));
-        if !same_connection(&s.config, &config) {
-            s.synced_credentials.clear();
-            s.credentials_seeded = false;
-        }
-        s.config = config;
-        prune_unconfirmed(s);
-        let inventory = if s.config.enabled { Some(inventory(&s.confirmed_credentials)?) } else { None };
-        if let Some(inventory) = &inventory {
-            seed_inventory(s, inventory, "历史账号补传");
-        }
-        s.revision = s.revision.saturating_add(1);
-        s.failures = 0;
-        s.blocked = false;
-        s.next_retry_ms = 0;
-        s.status = if !s.config.enabled { "disabled" } else if s.queue.is_empty() { "idle" } else { "pending" }.into();
-        s.message = "配置已保存".into();
-        Ok(s.snapshot())
-    })?;
-    WAKE.notify_one();
-    Ok(snapshot)
+pub fn save(config: Config) -> Result<Snapshot> {
+    let settings = backup_settings::legacy_settings(Game::Steam, &config)?;
+    backup_settings::shared_backup_save(settings)?;
+    get()
 }
 
-fn valid_credential(account: &str, password: &str) -> bool {
+pub(crate) fn valid_credential(account: &str, password: &str) -> bool {
     !account.is_empty() && !password.is_empty() && !account.contains("----")
         && !account.contains(['\r', '\n', '\0']) && !password.contains(['\r', '\n', '\0'])
 }
@@ -372,7 +407,7 @@ struct Inventory {
     missing: Vec<String>,
 }
 
-fn credential_digest(account: &str, password: &str) -> String {
+pub(crate) fn credential_digest(account: &str, password: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(account.trim().to_ascii_lowercase().as_bytes());
     digest.update([0]);
@@ -396,7 +431,7 @@ fn upload_allowed(store: &Store, pending: &Pending) -> bool {
 }
 
 pub fn login_attempt_started(account: &str) -> Result<()> {
-    edit(|s| {
+    edit_local(|s| {
         forget_confirmation(s, account);
         Ok(())
     })
@@ -495,7 +530,7 @@ pub fn save_password(account: &str, password: &str) -> Result<Snapshot> {
 pub fn confirmed_login(account: &str, password: &str, source: &str) {
     let account = account.trim();
     let result = (|| -> Result<()> {
-        edit(|s| s.confirm_success(account, password, source))?;
+        edit_local(|s| s.confirm_success(account, password, source))?;
         WAKE.notify_one();
         Ok(())
     })();
@@ -606,7 +641,7 @@ impl Remote {
         let ssh_config = client::Config { inactivity_timeout: Some(Duration::from_secs(35)), ..Default::default() };
         let connected = timed(client::connect(Arc::new(ssh_config), (config.host.as_str(), config.port), handler), "SSH 连接").await;
         if mismatch.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(error("host_key_error", "NAS 主机密钥与已保存记录不一致，连接已停止；请核对服务器，确认更换后关闭程序并更新 Data\\accounts.json 中的 backup.config.fingerprint", false));
+            return Err(error("host_key_error", "NAS 主机密钥与已保存记录不一致，连接已停止；请核对服务器，确认更换后关闭程序并更新对应账号 JSON 中的 NAS 主机指纹", false));
         }
         let mut ssh = connected?;
         if !timed(ssh.authenticate_password(&config.username, &config.password), "NAS 登录").await?.success() {
@@ -815,50 +850,60 @@ impl Remote {
 #[derive(Serialize)]
 pub struct TestReport { pub message: String, pub fingerprint: String }
 
-pub async fn test(mut config: Config) -> Result<TestReport> {
-    config.host = config.host.trim().into();
-    config.username = config.username.trim().into();
-    config.remote_path = config.remote_path.trim().into();
-    let saved = load()?;
-    config.fingerprint = if config.host == saved.config.host && config.port == saved.config.port {
-        saved.config.fingerprint.clone()
-    } else { String::new() };
+/// 共享经测试的 SFTP 传输层；调用方各自维护账号、配置及回执，不共享库存。
+#[cfg(test)]
+pub(crate) async fn test_connection(config: &Config) -> Result<TestReport> {
+    validate_config(config)?;
+    let remote = Remote::connect(config).await?;
+    let result = remote.probe(&config.remote_path).await;
+    let fingerprint = remote.fingerprint.clone();
+    remote.close().await;
+    result?;
+    Ok(TestReport { message: "SFTP 登录、文件写入、替换及读回验证通过".into(), fingerprint })
+}
+
+pub(crate) async fn test_shared_connection(config: &Config, paths: &[String]) -> Result<TestReport> {
+    validate_config(config)?;
+    let remote = Remote::connect(config).await?;
     let result = async {
-        let remote = Remote::connect(&config).await?;
-        let result = remote.probe(&config.remote_path).await;
-        let fingerprint = remote.fingerprint.clone();
-        remote.close().await;
-        result?;
-        Ok::<_, Error>(fingerprint)
+        for path in paths { remote.probe(path).await?; }
+        Ok::<_, Error>(())
     }.await;
-    match result {
-        Ok(fingerprint) => {
-            config.fingerprint = fingerprint.clone();
-            *TESTED_CONFIG.lock().unwrap_or_else(|p| p.into_inner()) = Some(config.clone());
-            if same_connection(&saved.config, &config) {
-                let accepted = edit(|s| Ok(s.accept_connection_test(saved.revision, &config)))?;
-                if accepted { WAKE.notify_one(); }
-            }
-            Ok(TestReport { message: "SFTP 登录、文件写入、替换及读回验证通过".into(), fingerprint })
-        }
-        Err(e) => {
-            {
-                let mut tested = TESTED_CONFIG.lock().unwrap_or_else(|p| p.into_inner());
-                if tested.as_ref().is_some_and(|c| same_connection(c, &config)) { *tested = None; }
-            }
-            if same_connection(&saved.config, &config) {
-                edit(|s| {
-                    if s.revision == saved.revision && same_connection(&s.config, &config) { s.verified = false; }
-                    Ok(())
-                })?;
-            }
-            Err(e)
-        }
+    let fingerprint = remote.fingerprint.clone();
+    remote.close().await;
+    result?;
+    Ok(TestReport { message: format!("SFTP 公共连接通过，已验证 {} 个游戏备份文件的写入、替换与读回", paths.len()), fingerprint })
+}
+
+pub(crate) async fn upload_credentials(
+    config: &Config, client_id: &str, credentials: &[(String, String)],
+    pin: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    let batch: Vec<_> = credentials.iter().map(|(account, password)| Pending {
+        id: Uuid::new_v4().to_string(), account: account.clone(), password: password.clone(),
+        source: "已保存账号".into(), ts_ms: now(), manual: true,
+    }).collect();
+    if batch.iter().any(|p| !valid_credential(&p.account, &p.password)) {
+        return Err(error("format_error", "账号或密码格式无效，未上传", false));
     }
+    let remote = Remote::connect(config).await?;
+    let result = match pin(&remote.fingerprint) {
+        Ok(()) => tokio::time::timeout(Duration::from_secs(60), remote.commit(&config.remote_path, client_id, &batch)).await
+            .unwrap_or_else(|_| Err(error("network_error", "同步超时，记录保留，稍后自动重试", true))),
+        Err(e) => Err(e),
+    };
+    remote.close().await;
+    result
+}
+
+pub async fn test(config: Config) -> Result<TestReport> {
+    let settings = backup_settings::legacy_settings(Game::Steam, &config)?;
+    backup_settings::shared_backup_test(settings).await
 }
 
 pub async fn sync(force: bool, account: Option<&str>) -> Result<Snapshot> {
     let _guard = SYNC_LOCK.lock().await;
+    let _transfer = TRANSFER_LOCK.lock().await;
     let mut store = load()?;
     if !force && !store.config.enabled { return Ok(store.snapshot()); }
     // 旧队列仍需登录证明；只有用户明确手动同步的记录可绕过此自动备份前提。
@@ -899,10 +944,10 @@ pub async fn sync(force: bool, account: Option<&str>) -> Result<Snapshot> {
     let result = async {
         let remote = Remote::connect(&store.config).await?;
         // 首次成功认证后保存主机指纹，后续连接拒绝密钥改变。
-        let pinned = edit(|s| {
-            if s.revision == store.revision && s.config.fingerprint.is_empty() { s.config.fingerprint = remote.fingerprint.clone(); }
+        let pinned = backup_settings::pin(Game::Steam, &store.config, &remote.fingerprint).and_then(|_| edit(|s| {
+            if s.revision != store.revision { return Err(error("config_changed", "公共备份目标已改变，已停止上传", false)); }
             Ok(())
-        });
+        }));
         let result = match pinned {
             Ok(()) => tokio::time::timeout(Duration::from_secs(60), remote.commit(&store.config.remote_path, &store.client_id, &store.queue)).await
                 .unwrap_or_else(|_| Err(error("network_error", "同步超时，记录保留，稍后自动重试", true))),
@@ -911,10 +956,8 @@ pub async fn sync(force: bool, account: Option<&str>) -> Result<Snapshot> {
         remote.close().await;
         result
     }.await;
-    if result.is_err() {
-        let mut tested = TESTED_CONFIG.lock().unwrap_or_else(|p| p.into_inner());
-        if tested.as_ref().is_some_and(|c| same_connection(c, &store.config)) { *tested = None; }
-    }
+    let verification = backup_settings::verification(Game::Steam, &store.config, store.shared_generation, result.is_ok());
+    if let Err(error) = verification { return Err(error); }
     let mut obsolete = false;
     let snapshot = edit(|s| {
         if s.revision != store.revision { obsolete = true; WAKE.notify_one(); return Ok(s.snapshot()); }
@@ -1188,6 +1231,26 @@ async fn sync_only_adds_or_updates_and_never_deletes_or_truncates_the_account_fi
 }
 
 #[tokio::test]
+async fn shared_lol_transport_pins_before_writing_and_preserves_other_accounts() {
+    let f = fixture().await;
+    f.files.lock().unwrap().files.insert("/accounts.txt".into(), b"other----keep\nplayer----old\n".to_vec());
+    let sent = vec![("player".to_string(), "new".to_string())];
+    let rejected = upload_credentials(&f.config, "lol-device", &sent,
+        |_| Err(error("config_changed", "fixture rejection", false))).await;
+    assert_eq!(rejected.err().unwrap().code, "config_changed");
+    assert_eq!(f.files.lock().unwrap().files["/accounts.txt"], b"other----keep\nplayer----old\n");
+    let report = test_connection(&f.config).await.unwrap();
+    assert_eq!(report.fingerprint, f.config.fingerprint);
+    upload_credentials(&f.config, "lol-device", &sent, |fingerprint| {
+        assert_eq!(fingerprint, f.config.fingerprint); Ok(())
+    }).await.unwrap();
+    let files = f.files.lock().unwrap();
+    assert_eq!(files.files["/accounts.txt"], b"other----keep\nplayer----new\n");
+    assert!(!files.removed.iter().any(|p| p == "/accounts.txt"));
+    assert!(!files.truncated.iter().any(|p| p == "/accounts.txt"));
+}
+
+#[tokio::test]
 async fn authentication_and_host_key_fail_closed() {
     let f = fixture().await;
     let mut config = f.config.clone();
@@ -1325,6 +1388,59 @@ async fn openssh_rename_extension_and_network_outage() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shared_fixture(config: &Config, generation: u64, verified: bool) -> Resolved {
+        Resolved { config: config.clone(), digest: backup_settings::target_digest(config), generation, verified, suspended: false }
+    }
+    #[test]
+    fn shared_target_migration_keeps_receipts_and_strips_duplicate_connection_once() {
+        let folder = std::env::temp_dir().join(format!("gameready-shared-steam-{}", Uuid::new_v4())); fs::create_dir(&folder).unwrap();
+        let path = folder.join("accounts.json");
+        let config = Config { enabled: true, host: "nas.example.test".into(), username: "fixture".into(), password: "fixture-nas".into(), remote_path: "/steam.txt".into(), ..Default::default() };
+        let mut store = Store { config: config.clone(), verified: true, credentials_seeded: true, ..Default::default() };
+        store.enqueue("fixture-player", "fixture-password", "fixture"); store.queue[0].manual = true;
+        store.confirmed_credentials.insert("fixture-player".into(), "confirmed".into()); store.synced_credentials.insert("other".into(), "receipt".into());
+        let pending_id = store.queue[0].id.clone();
+        assert!(apply_shared(&mut store, shared_fixture(&config, 1, true)));
+        assert_eq!(store.synced_credentials["other"], "receipt"); assert!(store.credentials_seeded); assert_eq!(store.queue[0].id, pending_id); assert!(store.queue[0].manual);
+        write_runtime_store(&path, &store).unwrap(); let mut loaded = read_store(&path).unwrap();
+        assert!(loaded.config.host.is_empty() && loaded.config.password.is_empty());
+        assert!(!apply_shared(&mut loaded, shared_fixture(&config, 1, true)), "polling resolved settings must not rewrite the store");
+        let mut changed = config.clone(); changed.remote_path = "/new-steam.txt".into();
+        apply_shared(&mut loaded, shared_fixture(&changed, 2, false));
+        assert!(loaded.synced_credentials.is_empty()); assert!(!loaded.credentials_seeded); assert_eq!(loaded.queue[0].id, pending_id);
+        assert_eq!(loaded.confirmed_credentials["fixture-player"], "confirmed");
+        fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn shared_verification_unblocks_retry_without_invalidating_successful_inflight_receipt() {
+        let config = Config { enabled: true, remote_path: "/steam.txt".into(), ..Default::default() };
+        let mut store = Store { config: config.clone(), ..Default::default() };
+        apply_shared(&mut store, shared_fixture(&config, 1, false));
+        store.enqueue("fixture-player", "fixture-password", "fixture"); let sent = store.queue.clone();
+        store.status = "syncing".into(); store.blocked = true; store.failures = 3; store.next_retry_ms = 100;
+        let revision = store.revision;
+        apply_shared(&mut store, shared_fixture(&config, 1, true));
+        assert_eq!(store.revision, revision); assert_eq!(store.status, "syncing"); assert!(!store.blocked); assert_eq!(store.failures, 0); assert_eq!(store.next_retry_ms, 0);
+        store.acknowledge(&sent); assert!(store.queue.is_empty());
+        store.verified = false; store.status = "network_error".into(); store.blocked = true;
+        apply_shared(&mut store, shared_fixture(&config, 1, true)); assert!(!store.blocked); assert_eq!(store.status, "pending");
+    }
+    #[test]
+    fn local_steam_confirmation_and_invalidation_work_when_shared_settings_cannot_be_loaded() {
+        let folder = std::env::temp_dir().join(format!("gameready-local-steam-{}", Uuid::new_v4())); fs::create_dir(&folder).unwrap();
+        let path = folder.join("accounts.json");
+        let config = Config { enabled: true, host: "legacy.example.test".into(), username: "fixture".into(), password: "preserve-fixture".into(), remote_path: "/steam.txt".into(), ..Default::default() };
+        let store = Store { config: config.clone(), ..Default::default() }; write_store(&path, &store).unwrap();
+        fs::write(folder.join("backup-settings.json"), b"broken").unwrap();
+        edit_local_at(&path, || None, |store| store.confirm_success("fixture-player", "fixture-value", "fixture")).unwrap();
+        let restored = read_store(&path).unwrap(); assert_eq!(restored.config.password, config.password); assert_eq!(restored.queue.len(), 1);
+        assert!(restored.confirmed_credentials.contains_key("fixture-player"));
+        edit_local_at(&path, || None, |store| { forget_confirmation(store, "fixture-player"); Ok(()) }).unwrap();
+        let restored = read_store(&path).unwrap(); assert!(restored.confirmed_credentials.is_empty()); assert!(restored.queue.is_empty()); assert_eq!(restored.config.host, config.host);
+        fs::write(&path, b"broken accounts").unwrap(); assert!(edit_local_at(&path, || None, |_| Ok(())).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"broken accounts"); fs::remove_dir_all(folder).unwrap();
+    }
 
     #[test]
     fn duplicate_accounts_use_last_remote_then_new_password() {
