@@ -1,8 +1,8 @@
 # GameReady
 
-Windows 游戏配置便携工具，支持 LOL 配置守护、LOL 与 Steam 账号管理，以及 NAS 账号备份。单 exe，无需安装。
+Windows 游戏配置便携工具，支持 LOL 配置守护、LOL 与 Steam 账号管理，以及 NAS 账号备份。主程序为便携单 exe，已内置 WeGame 快速填入所需的 FakerInput 驱动安装包，首次使用可在程序内一键安装。
 
-当前版本：**v0.1.23** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
+当前版本：**v0.1.24** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
 
 ## 下载与使用
 
@@ -36,7 +36,13 @@ Steam 账号列表直接读取 exe 同级 `Data/accounts.json`，换电脑或移
 
 LOL 页直接显示账号和密码，点击星标可收藏或取消收藏，支持新增、编辑和删除账号。剪贴板含可识别的单行账号密码时，新增区显示「识别」按钮；点击仅填入，需再点「添加」保存。账号资料及收藏状态保存在 exe 同级 `Data/lol-accounts.json`，随 Data 迁移；不依赖本机游戏登录记录。
 
-悬停账号行时，右侧会滑出「填入」按钮。先将正在运行的 WeGame 切到账号密码登录页，再点击「填入」；程序会恢复并显示窗口，清空旧内容后快速发送账号密码，不点击登录。填写期间请勿移动鼠标或切换窗口。部分网吧版的密码保护会拒绝自动输入，遇到可检测的拒绝或焦点变化会停止并提示；填入后仍需检查 WeGame 并手动登录。
+悬停账号行时，编辑、删除按钮之前会显示「填入」，编辑和删除位置不变。先将正在运行的 WeGame 切到 QQ 数字账号的账号密码登录页，再点击「填入」；程序按当前进程定位，支持恢复最小化或隐藏的窗口，清空旧内容后填写账号和密码，不点击登录。当前网吧版实测完整填入约 0.8–0.9 秒，耗时随客户端状态和内容长度变化。填写期间请勿操作鼠标键盘或切换窗口；按 Esc 可停止，结束后核对 WeGame 并手动登录。
+
+受保护密码通过 FakerInput 0.1.1 x64 虚拟 HID 键盘填入。约 1 MB 的官方原版驱动安装包已内嵌在 `gameready.exe`，无需用户另外下载。首次点击「填入」发现组件缺失时，会显示用途、[官方下载备用链接](https://github.com/Ryochan7/FakerInput/releases/download/v0.1.1/FakerInput_Setup_0.1.1_x64.msi)和「安装内置组件」按钮；也可从「关于 → WeGame 填入组件 → 查看 / 安装」打开。点击安装后由 GameReady 释放并校验安装包、调用 Windows Installer，请确认 Windows 的管理员授权与驱动安装提示。取消或失败可重试，要求重启时会提示，不会自行重启；安装成功后再次点击账号「填入」。
+
+驱动每台电脑只需安装一次，已安装且就绪时直接填入，不再弹窗或重复安装；换电脑时仍需由程序安装一次。组件可以通过 Windows「已安装的应用」卸载。缺组件、设备不兼容或被占用时，不会恢复或清空 WeGame 输入框；安装结束也不会自动发送账号密码。GameReady 不修改 WeGame 或系统保护。
+
+[FakerInput 官方项目](https://github.com/Ryochan7/FakerInput)采用 MIT 许可且已归档；已验证当前客户端的完整输入、重复覆盖、移动及隐藏/最小化恢复，其他版本仍需实测。安装包签名发布者为 Ryodigi Solutions LLC，SHA-256 为 `4c0aefb7340051a91d606776243298b5cd1143ef5508bbae6800c474f9ed0840`。内置包在构建和安装前校验哈希、签名；安装不需要联网下载。完整许可随 EXE 内置，可在组件窗口展开查看，亦附于本文末尾。
 
 「账号备份」打开 LOL 的备份设置和待同步列表，可填写远程文件路径、开关自动备份、测试路径、保存配置，以及单个账号同步和全部同步。LOL 与 Steam 共用「设置 → 账号备份」中的 SFTP 连接；LOL 默认文件为 `/GameReady/lol-accounts.txt`。自动备份默认关闭，开启后新增账号或修改密码会触发同步。
 
@@ -66,7 +72,7 @@ LOL 页直接显示账号和密码，点击星标可收藏或取消收藏，支�
 - 本版只读取 `version: 2` 的统一格式 `accounts.json`，程序不内置旧文件转换。新用户直接运行；v0.1.15 及更早版本的分散账号文件需要在升级前完成一次性转换，不能直接按旧格式沿用。格式损坏或版本不受支持时保留原文件并报错，避免覆盖数据。
 - 启动后在后台检查 GitHub 最新正式 Release，之后每 6 小时检查一次；发现新版时，版本号旁持续显示「有最新版本 v…」。也可在关于页手动检查，点击更新会下载并校验官方 EXE，保存到 `Data/updates` 后打开文件所在目录。
 - 升级前退出程序（包括托盘），替换 exe 并保留原 `Data` 目录。
-- 公开发行 zip 仅含 `gameready.exe` 和本说明；分享时不要附带自己的 `Data`。
+- Release 只提供 EXE：`gameready.exe` 用于固定下载链接，同内容的版本化 EXE 用于程序检查更新；不提供 ZIP。只保留最新一个 Release；分享时不要附带自己的 `Data`。
 
 ## 从源码构建
 
@@ -76,6 +82,30 @@ LOL 页直接显示账号和密码，点击星标可收藏或取消收藏，支�
 powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
 ```
 
-每次打包都会更新桌面的 `gameready.exe`，文件名固定。替换前停止 GameReady 及其子进程并等待完全退出，退出失败则中止替换；替换后校验 SHA-256，保留旁边的 `Data`。同时生成根目录的 `gameready.exe`，并在 `release` 目录生成已清除编译机路径信息的 exe 和 zip。加 `-Clean` 可在构建后清理缓存。
+每次打包都会更新桌面的 `gameready.exe`，文件名固定。替换前停止 GameReady 及其子进程并等待完全退出，退出失败则中止替换；替换后校验 SHA-256，保留旁边的 `Data`。同时生成根目录的 `gameready.exe`，并在 `release` 目录生成已清除编译机路径信息的固定名和版本化 EXE，不生成 ZIP。加 `-Clean` 可在构建后清理缓存。
 
 `src` 放程序和测试，`assets` 放界面、图标及合并后的内置模板；`Data` 仍只在运行时生成。
+
+## FakerInput 开源许可
+
+MIT License
+
+Copyright (c) 2021 Travis Nickles
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

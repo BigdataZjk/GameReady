@@ -32,6 +32,8 @@ mod backup_settings;
 mod account_store;
 mod lol_accounts;
 mod wegame;
+mod wegame_hid;
+mod wegame_component;
 mod update;
 mod vdf {
 //! Steam VDF parsing, account records and preference merging.
@@ -341,6 +343,9 @@ fn main() {
             lol_accounts::lol_account_delete,
             lol_accounts::lol_account_favorite,
             lol_accounts::lol_account_fill_wegame,
+            wegame_component::wegame_component_status,
+            wegame_component::wegame_component_install,
+            wegame_component::wegame_component_open_link,
             lol_accounts::lol_backup_get,
             lol_accounts::lol_backup_save,
             lol_accounts::lol_backup_test,

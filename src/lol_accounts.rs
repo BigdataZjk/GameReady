@@ -249,7 +249,7 @@ pub fn lol_account_favorite(account_name: String, favorite: bool) -> Result<()> 
 }
 
 #[tauri::command]
-pub async fn lol_account_fill_wegame(account_name: String) -> Result<()> {
+pub async fn lol_account_fill_wegame(account_name: String) -> Result<crate::wegame::FillOutcome> {
     tauri::async_runtime::spawn_blocking(move || {
         // 点击时重新读取同级 Data，避免使用已修改或已删除账号的列表缓存。
         let store = load()?;

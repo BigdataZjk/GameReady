@@ -280,6 +280,31 @@ body.rail-dragging{ cursor:grabbing; }
 .modal-head .x{ margin-left:auto; cursor:pointer; color:var(--txt3); width:26px; height:26px; border-radius:7px; display:flex; align-items:center; justify-content:center; }
 .modal-head .x:hover{ background:#182130; color:var(--txt); }
 .modal-body{ padding:0 14px 14px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+.component-modal{ width:380px; }
+.component-modal .x{ border:0; background:transparent; }
+.component-modal .modal-head{ padding:18px 20px 14px; }
+.component-modal .modal-body{ padding:0 20px 18px; gap:13px; }
+.component-intro{ font-size:12px; line-height:1.8; color:var(--txt2); }
+.component-package{ display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+.component-package-icon{ display:grid; place-items:center; width:36px; height:36px; flex:none; color:var(--acc); border-radius:9px; background:rgba(var(--acc-rgb),.08); }
+.component-package-icon svg{ width:24px; height:24px; }
+.component-package strong{ font-size:13px; font-weight:600; color:var(--txt); }
+.component-package-meta{ font-size:11px; color:var(--txt3); margin-top:4px; }
+.component-links{ display:flex; gap:16px; flex-wrap:wrap; }
+.component-links a{ color:var(--acc); font-size:12px; text-underline-offset:3px; }
+.component-links a[aria-disabled="true"]{ opacity:.55; pointer-events:none; }
+.component-license{ font-size:11px; color:var(--txt3); }
+.component-license summary{ cursor:pointer; }
+.component-license pre{ white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.5; margin-top:8px; }
+.component-footer{ flex:none; padding:14px 20px 18px; border-top:1px solid var(--line); background:rgba(255,255,255,.015); }
+.component-status-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; color:var(--txt3); font-size:11px; }
+.component-recheck{ border:0; padding:3px 0 3px 8px; color:var(--txt2); background:transparent; font:inherit; cursor:pointer; }
+.component-recheck:hover{ color:var(--acc); }
+.component-recheck:disabled{ opacity:.5; cursor:default; }
+.component-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+.component-actions .btn{ min-width:72px; height:34px; justify-content:center; }
+.component-actions .primary{ min-width:128px; }
+.env-row .mini-link{ border:1px solid rgba(var(--acc-rgb),.2); background:transparent; font-family:inherit; font-size:10.5px; padding:4px 8px; white-space:nowrap; }
 .acct{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; display:flex; align-items:center; gap:10px; transition:.15s; }
 .acct.cur{ border-color:color-mix(in srgb,var(--steam) 45%,transparent); box-shadow:0 0 12px rgba(90,162,255,.10); }
 .acct-favorite{ width:34px; height:34px; flex:none; display:flex; align-items:center; justify-content:center; border:0; padding:0; background:transparent; color:var(--txt3); font-size:25px; line-height:1; cursor:pointer; }
@@ -702,6 +727,7 @@ body.preview.backup-review .window{ flex-shrink:0; }
         <div class="env-title">运行环境</div>
         <div class="env-group">
           <div class="env-row"><span class="k">WebView2 运行时</span><span class="v">界面引擎</span><span class="st ok"><span class="dot"></span>已就绪</span></div>
+          <div class="env-row"><span class="k">WeGame 填入组件</span><span class="v">安装包已内置</span><button type="button" class="mini-link" id="openWeGameComponent">查看 / 安装</button></div>
           <div class="env-row"><span class="k">数据目录</span><span class="v">.\Data（便携模式）</span><span class="st acc"><span class="dot"></span>exe 同级</span></div>
           <div class="env-row"><span class="k">配置包</span><span class="v">编译期内嵌 · LOL 5 个 + Steam 2 个</span></div>
         </div>
@@ -815,6 +841,30 @@ body.preview.backup-review .window{ flex-shrink:0; }
       <div class="backup-foot">
         <div class="backup-feedback" id="sharedBackupFeedback" role="status" aria-live="polite" aria-atomic="true"></div>
         <div class="f-actions"><div class="backup-test-group"><button type="button" class="btn" id="sharedBackupTest">测试连接</button><span id="sharedBackupTestLight" class="backup-test-light" data-state="untested" role="status" aria-label="当前配置尚未测试"></span><span id="sharedBackupTestResult" class="backup-test-result" data-state="untested"></span></div><button type="button" class="btn primary" id="sharedBackupSave">保存连接</button></div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-mask" id="wegameComponentMask">
+    <div class="modal component-modal" role="dialog" aria-modal="true" aria-labelledby="wegameComponentTitle" aria-describedby="wegameComponentIntro">
+      <div class="modal-head"><h2 id="wegameComponentTitle">WeGame 填入组件</h2><button type="button" class="x" id="closeWeGameComponent" aria-label="关闭填入组件">✕</button></div>
+      <div class="modal-body">
+        <p class="component-intro" id="wegameComponentIntro">完成一次安装，即可快速填入 WeGame 账号密码。<br>安装包已内置，无需另行下载。</p>
+        <div class="component-package">
+          <div class="component-package-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/></svg></div>
+          <div><strong>FakerInput 虚拟键盘驱动</strong><div class="component-package-meta">0.1.1 · Windows x64 · 约 1 MB</div></div>
+        </div>
+        <div class="backup-note">每台电脑只需安装一次。安装时请确认 Windows 的管理员权限与驱动提示。</div>
+        <div class="component-links">
+          <a id="wegameComponentDownload" href="https://github.com/Ryochan7/FakerInput/releases/download/v0.1.1/FakerInput_Setup_0.1.1_x64.msi" target="_blank" rel="noopener noreferrer">官方下载（备用）</a>
+          <a id="wegameComponentSource" href="https://github.com/Ryochan7/FakerInput" target="_blank" rel="noopener noreferrer">官方项目</a>
+        </div>
+        <div class="backup-note">由 Ryodigi Solutions LLC 签名。项目已归档；可在 Windows「已安装的应用」中卸载。</div>
+        <details class="component-license"><summary>开源许可（MIT）</summary><pre id="wegameComponentLicense"></pre></details>
+      </div>
+      <div class="component-footer">
+        <div class="component-status-head"><span>组件状态</span><button type="button" class="component-recheck" id="checkWeGameComponent">↻ 重新检测</button></div>
+        <div class="backup-feedback" id="wegameComponentStatus" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
+        <div class="component-actions"><button type="button" class="btn" id="dismissWeGameComponent">稍后</button><button type="button" class="btn primary" id="installWeGameComponent" disabled>安装内置组件</button></div>
       </div>
     </div>
   </div>
@@ -2008,7 +2058,7 @@ function renderLolAccounts(){
     const fillAction=el('div','lol-fill-action');
     const fill=el('button','op-btn go lol-fill',filling?'填入中…':'填入'); fill.type='button'; fill.disabled=lolAccountBusy;
     fill.setAttribute('aria-label','填入 WeGame '+account.account_name);
-    fill.title='显示 WeGame 并替换账号密码，不自动登录';
+    fill.title='显示 WeGame 并替换账号密码，不自动登录；首次使用可安装内置组件';
     fill.addEventListener('click',()=>fillLolWeGame(account)); fillAction.appendChild(fill);
     actions.append(edit,remove); card.append(star,info,fillAction,actions); list.appendChild(card);
   }
@@ -2054,13 +2104,15 @@ async function lolAccountAction(action,account=null){
   finally{ setLolAccountBusy(false); await refreshLolAccounts(); refreshLolBackup(); }
 }
 async function fillLolWeGame(account){
-  if(lolAccountBusy) return;
+  if(lolAccountBusy || wegameComponentBusy==='installing') return;
   if(!hasTauri){ toast(NO_TAURI_MSG,'err'); return; }
   lolFillingAccount=account.account_name;
   setLolAccountBusy(true);
   try{
-    await invoke('lol_account_fill_wegame',{accountName:account.account_name});
-    toast('已发送填入，请检查 WeGame 后手动登录','ok');
+    const outcome=await invoke('lol_account_fill_wegame',{accountName:account.account_name});
+    if(outcome==='driver_required'){ await openWeGameComponent(); return; }
+    if(outcome!=='input_sent') throw Error('未收到可确认的填入结果，请检查 WeGame');
+    toast('账号密码已发送到 WeGame，请核对后手动登录','ok');
   }catch(e){ toast('WeGame 填入失败：'+errText(e),'err'); }
   finally{ lolFillingAccount=null; setLolAccountBusy(false); }
 }
@@ -2076,6 +2128,87 @@ window.addEventListener('focus',refreshVisibleLolAccounts);
 document.addEventListener('visibilitychange',refreshVisibleLolAccounts);
 if(hasTauri) setInterval(refreshVisibleLolAccounts,2000);
 renderLolAccounts();
+
+/* 缺组件只打开说明；只有明确点击安装按钮才调用系统安装程序。 */
+let wegameComponentBusy=null, wegameComponentState=null, wegameComponentEpoch=0, wegameComponentReturnFocus=null;
+function componentFeedback(message,tone='info'){
+  const node=$('wegameComponentStatus');node.textContent=message;node.dataset.tone=tone==='ok'?'success':tone==='err'?'error':'info';
+}
+function renderWeGameComponent(){
+  const busy=!!wegameComponentBusy, installed=wegameComponentState==='ready', restart=wegameComponentState==='restart_required';
+  ['closeWeGameComponent','dismissWeGameComponent'].forEach(id=>$(id).disabled=wegameComponentBusy==='installing');
+  $('checkWeGameComponent').disabled=busy;
+  $('installWeGameComponent').disabled=busy || wegameComponentState!=='missing';
+  $('installWeGameComponent').hidden=installed || restart;
+  $('installWeGameComponent').textContent=wegameComponentBusy==='installing'?'正在安装…':'安装内置组件';
+  $('dismissWeGameComponent').textContent=installed || restart?'关闭':'稍后';
+  $('wegameComponentMask').querySelectorAll('a').forEach(a=>{a.setAttribute('aria-disabled',String(wegameComponentBusy==='installing'));a.tabIndex=wegameComponentBusy==='installing'?-1:0;});
+}
+function componentStateFeedback(){
+  if(wegameComponentState==='ready') componentFeedback('组件已就绪。关闭此窗口后点击账号「填入」即可。','ok');
+  else if(wegameComponentState==='missing') componentFeedback('尚未安装。点击「安装内置组件」即可完成安装。');
+  else if(wegameComponentState==='restart_required') componentFeedback('安装已完成，需要重启 Windows 后使用。请方便时手动重启。');
+  else throw Error('未收到可确认的组件状态，请重新检测');
+}
+async function checkWeGameComponent(){
+  if(wegameComponentBusy) return;
+  const epoch=++wegameComponentEpoch;
+  wegameComponentBusy='checking';wegameComponentState=null;renderWeGameComponent();componentFeedback('正在检测组件…');
+  try{
+    const snapshot=await invoke('wegame_component_status');
+    if(epoch!==wegameComponentEpoch) return;
+    if(!snapshot || !['missing','ready','restart_required'].includes(snapshot.state)) throw Error('未收到可确认的组件状态，请重新检测');
+    wegameComponentState=snapshot.state;
+    $('wegameComponentLicense').textContent=snapshot.license || '许可随 GameReady 内置，完整文本亦见 README。';
+    componentStateFeedback();
+  }catch(e){ if(epoch===wegameComponentEpoch) componentFeedback('检测失败：'+errText(e),'err'); }
+  finally{ if(epoch===wegameComponentEpoch){wegameComponentBusy=null;renderWeGameComponent();} }
+}
+async function openWeGameComponent(){
+  if($('wegameComponentMask').classList.contains('show')) return;
+  wegameComponentReturnFocus=document.activeElement;
+  $('wegameComponentMask').classList.add('show');$('closeWeGameComponent').focus();
+  if(!hasTauri){componentFeedback(NO_TAURI_MSG,'err');return;}
+  await checkWeGameComponent();
+}
+function closeWeGameComponent(){
+  if(wegameComponentBusy==='installing') return;
+  ++wegameComponentEpoch;wegameComponentBusy=null;
+  $('wegameComponentMask').classList.remove('show');
+  if(wegameComponentReturnFocus?.isConnected) wegameComponentReturnFocus.focus();
+}
+async function installWeGameComponent(){
+  if(wegameComponentBusy || wegameComponentState!=='missing' || !$('wegameComponentMask').classList.contains('show')) return;
+  wegameComponentBusy='installing';renderWeGameComponent();
+  componentFeedback('正在安装，请确认 Windows 提示；可在系统提示中取消。');$('wegameComponentStatus').focus();
+  try{
+    const result=await invoke('wegame_component_install');
+    if(!['ready','restart_required'].includes(result)) throw Error('未收到可确认的安装结果，请重新检测');
+    wegameComponentState=result;componentStateFeedback();
+  }catch(e){componentFeedback(errText(e),'err');}
+  finally{wegameComponentBusy=null;renderWeGameComponent();$('dismissWeGameComponent').focus();}
+}
+$('openWeGameComponent').addEventListener('click',openWeGameComponent);
+$('closeWeGameComponent').addEventListener('click',closeWeGameComponent);
+$('dismissWeGameComponent').addEventListener('click',closeWeGameComponent);
+$('checkWeGameComponent').addEventListener('click',checkWeGameComponent);
+$('installWeGameComponent').addEventListener('click',installWeGameComponent);
+$('wegameComponentMask').addEventListener('click',e=>{if(e.target===$('wegameComponentMask')) closeWeGameComponent();});
+[['wegameComponentDownload','download'],['wegameComponentSource','source']].forEach(([id,link])=>$(id).addEventListener('click',async e=>{
+  if(wegameComponentBusy==='installing'){e.preventDefault();return;}
+  if(hasTauri){e.preventDefault();try{await invoke('wegame_component_open_link',{link});}catch(error){componentFeedback(errText(error),'err');}}
+}));
+document.addEventListener('keydown',e=>{
+  if(!$('wegameComponentMask').classList.contains('show')) return;
+  if(e.key==='Escape'){e.preventDefault();closeWeGameComponent();return;}
+  if(e.key==='Tab'){
+    const nodes=[...$('wegameComponentMask').querySelectorAll('button:not([disabled]),a:not([aria-disabled="true"]),summary')].filter(n=>n.tabIndex>=0&&n.getClientRects().length);
+    const first=nodes[0],last=nodes[nodes.length-1];
+    if(!first){e.preventDefault();return;}
+    if(e.shiftKey && (document.activeElement===first || !nodes.includes(document.activeElement))){e.preventDefault();last.focus();}
+    else if(!e.shiftKey && (document.activeElement===last || !nodes.includes(document.activeElement))){e.preventDefault();first.focus();}
+  }
+});
 
 /* LOL 识别复用同一解析规则，但状态与 Steam 隔离；识别只填表，不保存账号。 */
 let lolClipboardSequence=null, lolClipboardCredentials=null, lolClipboardRequest=null, lolClipboardEpoch=0, lolRecognizeBusy=false;

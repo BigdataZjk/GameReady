@@ -14,6 +14,6 @@
 
 - 提交前审查明确的文件清单，不提交任何层级的 `Data`、真实账号、密码、SteamID、NAS 连接信息、本地环境配置、日志或截图。
 - 测试仅使用虚构数据；源文件与发行程序不得包含本机用户目录或其他个人路径。
-- Release 附件只使用已检查的构建产物；zip 仅含 `gameready.exe` 和 `README.md`。
+- Release 附件只上传已检查的 EXE，不上传 ZIP 等额外附件。
 - 每次发布额外上传同一份已核验 EXE，附件名固定为 `gameready.exe`，用于 `/releases/latest/download/gameready.exe` 下载直链；同时保留版本化 EXE，供现有程序检查与下载更新。
-- 清理旧 Releases 时先发布并验证新版及其附件，再删除旧 Releases；Git 历史重写必须有用户明确授权。
+- 每次发布先验证新版及其附件，再删除旧 Releases，只保留最新一个版本的 Release；保留 Git 历史，历史重写必须有用户明确授权。

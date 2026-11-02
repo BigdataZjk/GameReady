@@ -6,6 +6,25 @@ $projectRoot = $PSScriptRoot
 $oldEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
 
 function Stop-GameReadyProcesses {
+    $snapshot = @(Get-CimInstance Win32_Process)
+    $treeIds = [Collections.Generic.HashSet[uint32]]::new()
+    foreach ($root in @($snapshot | Where-Object { $_.Name -ieq 'gameready.exe' })) { [void]$treeIds.Add($root.ProcessId) }
+    do {
+        $added = $false
+        foreach ($entry in $snapshot) {
+            if ($treeIds.Contains($entry.ParentProcessId) -and $treeIds.Add($entry.ProcessId)) { $added = $true }
+        }
+    } while ($added)
+    $tracked = @()
+    try {
+    foreach ($processId in $treeIds) {
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if ($process) {
+            # Keep the original process handle, so PID reuse cannot hide a surviving child.
+            [void]$process.Handle
+            $tracked += $process
+        }
+    }
     foreach ($running in @(Get-Process -Name gameready -ErrorAction SilentlyContinue)) {
         try {
             if (-not $running.HasExited) {
@@ -24,10 +43,26 @@ function Stop-GameReadyProcesses {
     if (Get-Process -Name gameready -ErrorAction SilentlyContinue) {
         throw 'GameReady is still running; executable replacement stopped'
     }
+    foreach ($process in $tracked) {
+        if (-not $process.WaitForExit(10000)) { throw 'A GameReady child is still running; executable replacement stopped' }
+    }
+    } finally { foreach ($process in $tracked) { $process.Dispose() } }
 }
 
 Push-Location $projectRoot
 try {
+    # Ship the reviewed official MSI inside the EXE, with its redistribution license.
+    $componentPackage = Join-Path $projectRoot 'assets/third-party/fakerinput/FakerInput_Setup_0.1.1_x64.msi'
+    $componentHash = '4C0AEFB7340051A91D606776243298B5CD1143EF5508BBAE6800C474F9ED0840'
+    if ((Get-FileHash -LiteralPath $componentPackage -Algorithm SHA256).Hash -ne $componentHash) {
+        throw 'Bundled FakerInput package does not match the reviewed official release'
+    }
+    $componentSignature = Get-AuthenticodeSignature -LiteralPath $componentPackage
+    if ($componentSignature.Status -ne 'Valid' -or $componentSignature.SignerCertificate.Subject -notmatch '^CN=Ryodigi Solutions LLC,') {
+        throw 'Bundled FakerInput signature validation failed'
+    }
+    $componentLicense = Get-Content -LiteralPath (Join-Path $projectRoot 'assets/third-party/fakerinput/LICENSE.txt') -Raw
+    if ($componentLicense -notmatch 'Copyright \(c\) 2021 Travis Nickles') { throw 'Bundled FakerInput license is missing' }
     $version = (Get-Content -LiteralPath 'tauri.conf.json' -Encoding UTF8 -Raw | ConvertFrom-Json).version
     $metadata = cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read package metadata' }
@@ -79,22 +114,10 @@ try {
     $exeAsset = Join-Path $releaseDir "$assetBase.exe"
     Copy-Item -LiteralPath $builtExe -Destination $exeAsset -Force
 
-    Add-Type -AssemblyName System.IO.Compression
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zipAsset = Join-Path $releaseDir "$assetBase.zip"
-    $zipTemp = Join-Path $releaseDir "$assetBase.$([guid]::NewGuid()).tmp.zip"
-    try {
-        $archive = [IO.Compression.ZipFile]::Open($zipTemp, [IO.Compression.ZipArchiveMode]::Create)
-        try {
-            # Explicit allowlist: never package Data, credentials, logs, or screenshots.
-            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $builtExe, 'gameready.exe')
-            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $projectRoot 'README.md'), 'README.md')
-        } finally { $archive.Dispose() }
-        Move-Item -LiteralPath $zipTemp -Destination $zipAsset -Force
-    } finally {
-        if (Test-Path -LiteralPath $zipTemp) { Remove-Item -LiteralPath $zipTemp }
-    }
-    foreach ($asset in @($exeAsset, $zipAsset)) {
+    # Two names for the same EXE: stable direct download and legacy update checks.
+    $stableAsset = Join-Path $releaseDir 'gameready.exe'
+    Copy-Item -LiteralPath $builtExe -Destination $stableAsset -Force
+    foreach ($asset in @($exeAsset, $stableAsset)) {
         $sha256 = [Security.Cryptography.SHA256]::Create()
         $stream = [IO.File]::OpenRead($asset)
         try {
@@ -104,7 +127,7 @@ try {
             }
         } finally { $stream.Dispose(); $sha256.Dispose() }
     }
-    # 压缩与校验完成后，在替换前停止并等待退出，缩短关闭程序到更新完成的间隔。
+    # 校验完成后，在替换前停止并等待退出，缩短关闭程序到更新完成的间隔。
     Stop-GameReadyProcesses
     Copy-Item -LiteralPath $builtExe -Destination (Join-Path $projectRoot 'gameready.exe') -Force
     Copy-Item -LiteralPath $builtExe -Destination $desktopExe -Force

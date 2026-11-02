@@ -1,17 +1,18 @@
 //! 通过当前运行的 WeGame 登录窗口执行填写；不启动其他安装、不登录。
-//! 密码仅发送给已验证的 Edit，不使用剪贴板或全局键盘输入。
-//! Ok 表示操作结束且观察期未发现拒绝，并不证明安全组件内部密码完整。
+//! 受保护密码通过 FakerInput 虚拟 HID 键盘输入；缺组件时由界面引导安装。
+//! 不读取密码控件、不使用剪贴板、不发送回车、不自动安装驱动。
+use crate::wegame_hid::{self, Keyboard};
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use sysinfo::System;
-use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, POINT, RECT, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, POINT, RECT, WAIT_TIMEOUT};
 use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE};
-use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::Input::Ime::{ImmGetContext, ImmGetOpenStatus, ImmReleaseContext};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 type Result<T> = std::result::Result<T, String>;
@@ -19,6 +20,8 @@ static FILL_LOCK: Mutex<()> = Mutex::new(());
 const LOST_TARGET: &str = "WeGame 窗口或焦点已变化，已停止填入；请检查当前内容后重试";
 const REJECTED: &str = "WeGame 未正常接收密码输入，已停止填入；请先按 WeGame 提示恢复密码输入后重试";
 const MAX_CHARS: usize = 128;
+const KEY_HOLD: Duration = Duration::from_millis(4);
+const KEY_GAP: Duration = Duration::from_millis(4);
 
 struct Budget(Instant);
 impl Budget {
@@ -27,10 +30,6 @@ impl Budget {
         if Instant::now() >= self.0 { return Err("填入超时，已停止；请检查 WeGame 当前内容后重试".into()); }
         if unsafe { GetAsyncKeyState(i32::from(VK_ESCAPE.0)) } < 0 { return Err("已取消填入，请检查 WeGame 当前内容".into()); }
         Ok(())
-    }
-    fn message_ms(&self) -> Result<u32> {
-        self.check()?;
-        Ok(self.0.saturating_duration_since(Instant::now()).as_millis().clamp(1, 150) as u32)
     }
 }
 
@@ -132,9 +131,12 @@ struct Target {
     root: HWND, root_pid: u32, account: HWND, password: HWND, auxiliary: HWND,
     password_pid: u32, processes: Vec<ProcessGuard>, layout: Layout,
 }
+struct Candidate {
+    root: HWND, root_pid: u32, edits: Vec<HWND>, account: HWND, processes: Vec<ProcessGuard>,
+}
 
-// 先选唯一进程/窗口结构，再恢复和检查几何。最小化时不依赖失真的客户区矩形。
-fn discover(budget: &Budget) -> Result<Target> {
+// 只读选择唯一进程/窗口结构。驱动、布局和全部字符通过预检后才恢复。
+fn discover(budget: &Budget) -> Result<Candidate> {
     let mut system = System::new();
     system.refresh_processes();
     let processes: BTreeMap<_, _> = system.processes().iter().map(|(id, process)| (id.as_u32(), ProcessInfo {
@@ -161,28 +163,57 @@ fn discover(budget: &Budget) -> Result<Target> {
         }).collect();
         let accounts: Vec<_> = descendants.iter().copied().filter(|hwnd| pid(*hwnd) == root_pid
             && class_name(*hwnd).eq_ignore_ascii_case("TWINCONTROL")).collect();
-        if edits.len() == 2 && !accounts.is_empty() { candidates.push((root, root_pid, edits, accounts)); }
+        if edits.len() == 2 && accounts.len() == 1 { candidates.push((root, root_pid, edits, accounts[0])); }
     }
     if candidates.len() != 1 { return Err(if candidates.is_empty() {
         "未识别到受支持的 WeGame 登录页，请切换到账号密码登录后重试"
     } else { "发现多个 WeGame 登录窗口，请只保留需要填入的那个窗口" }.into()); }
-    let (root, root_pid, edits, accounts) = candidates.remove(0);
+    let (root, root_pid, edits, account) = candidates.remove(0);
     let ids: BTreeSet<_> = [root_pid, pid(edits[0]), pid(edits[1])].into_iter().collect();
-    let guards: Vec<_> = ids.into_iter().map(ProcessGuard::open).collect::<Result<_>>()?;
-    restore(root, root_pid, &guards, budget)?;
-    let bounds = client_bounds(root)?;
-    let layout = Layout::new(bounds.width(), bounds.height()).ok_or("当前 WeGame 登录布局不受支持，未修改账号密码")?;
-    let passwords: Vec<_> = edits.iter().copied().filter(|hwnd| child_bounds(root, *hwnd)
-        .map(|r| layout.matches(r, layout.password())).unwrap_or(false)).collect();
-    let accounts: Vec<_> = accounts.into_iter().filter(|hwnd| child_bounds(root, *hwnd)
-        .map(|r| layout.matches(r, layout.client())).unwrap_or(false)).collect();
-    if passwords.len() != 1 || accounts.len() != 1 { return Err("无法可靠区分 WeGame 账号与密码输入框，未修改内容".into()); }
-    let password = passwords[0];
-    let auxiliary = edits.into_iter().find(|hwnd| *hwnd != password).ok_or(LOST_TARGET)?;
-    let target = Target { root, root_pid, account: accounts[0], password, auxiliary,
-        password_pid: pid(password), processes: guards, layout };
-    target.foreground()?;
-    Ok(target)
+    let processes: Vec<_> = ids.into_iter().map(ProcessGuard::open).collect::<Result<_>>()?;
+    let candidate = Candidate { root, root_pid, edits, account, processes };
+    candidate.validate()?;
+    Ok(candidate)
+}
+impl Candidate {
+    fn validate(&self) -> Result<()> {
+        if self.processes.iter().any(|p| !p.alive()) || pid(self.root) != self.root_pid
+            || pid(self.account) != self.root_pid
+            || !class_name(self.root).eq_ignore_ascii_case("TWINCONTROL")
+            || !class_name(self.account).eq_ignore_ascii_case("TWINCONTROL")
+            || unsafe { GetAncestor(self.account, GA_ROOT) } != self.root
+            || self.edits.iter().any(|hwnd| !class_name(*hwnd).eq_ignore_ascii_case("Edit")
+                || unsafe { GetAncestor(*hwnd, GA_ROOT) } != self.root
+                || !self.processes.iter().any(|p| p.pid == pid(*hwnd))) { return Err(LOST_TARGET.into()); }
+        Ok(())
+    }
+    fn layouts(&self) -> Result<(HKL, HKL)> {
+        self.validate()?;
+        let account = unsafe { GetKeyboardLayout(GetWindowThreadProcessId(self.account, None)) };
+        let password = unsafe { GetKeyboardLayout(GetWindowThreadProcessId(self.edits[0], None)) };
+        if self.edits.iter().any(|hwnd| unsafe { GetKeyboardLayout(GetWindowThreadProcessId(*hwnd, None)) } != password) {
+            return Err("密码控件键盘布局不一致，未修改输入框".into());
+        }
+        Ok((account, password))
+    }
+    fn activate(self, budget: &Budget) -> Result<Target> {
+        self.validate()?;
+        restore(self.root, self.root_pid, &self.processes, budget)?;
+        self.validate()?;
+        let bounds = client_bounds(self.root)?;
+        let layout = Layout::new(bounds.width(), bounds.height()).ok_or("当前 WeGame 登录布局不受支持，未修改账号密码")?;
+        let passwords: Vec<_> = self.edits.iter().copied().filter(|hwnd| child_bounds(self.root, *hwnd)
+            .map(|r| layout.matches(r, layout.password())).unwrap_or(false)).collect();
+        if passwords.len() != 1 || !layout.matches(child_bounds(self.root, self.account)?, layout.client()) {
+            return Err("无法可靠区分 WeGame 账号与密码输入框，未修改内容".into());
+        }
+        let password = passwords[0];
+        let auxiliary = self.edits.into_iter().find(|hwnd| *hwnd != password).ok_or(LOST_TARGET)?;
+        let target = Target { root: self.root, root_pid: self.root_pid, account: self.account, password, auxiliary,
+            password_pid: pid(password), processes: self.processes, layout };
+        target.foreground()?;
+        Ok(target)
+    }
 }
 
 fn wait_for_window(root: HWND, root_pid: u32, processes: &[ProcessGuard], budget: &Budget, mut ready: impl FnMut() -> Result<bool>) -> Result<()> {
@@ -237,9 +268,11 @@ impl Target {
     fn validate(&self) -> Result<()> {
         if self.processes.iter().any(|p| !p.alive()) || pid(self.root) != self.root_pid
             || pid(self.account) != self.root_pid || pid(self.password) != self.password_pid
+            || pid(self.auxiliary) != self.password_pid
             || !self.processes.iter().any(|p| p.pid == self.password_pid)
             || unsafe { GetAncestor(self.account, GA_ROOT) } != self.root
             || unsafe { GetAncestor(self.password, GA_ROOT) } != self.root
+            || unsafe { GetAncestor(self.auxiliary, GA_ROOT) } != self.root
             || !class_name(self.account).eq_ignore_ascii_case("TWINCONTROL")
             || !class_name(self.password).eq_ignore_ascii_case("Edit")
             || client_bounds(self.root)? != self.layout.client()
@@ -284,7 +317,8 @@ impl Target {
             let focus = current_focus()?;
             if !focus.is_invalid() && unsafe { GetAncestor(focus, GA_ROOT) } != self.root { return Err(LOST_TARGET.into()); }
             if focus != last_focus { changed = Instant::now(); last_focus = focus; }
-            if start.elapsed() >= Duration::from_millis(350) && changed.elapsed() >= Duration::from_millis(100) { return Ok(()); }
+            // 激活约 330ms 后客户端可能把焦点交给 CEF，先等此过程结束。
+            if start.elapsed() >= Duration::from_millis(380) && changed.elapsed() >= Duration::from_millis(40) { return Ok(()); }
             if start.elapsed() >= Duration::from_millis(900) { return Err("WeGame 登录页焦点尚未稳定，请稍后重试".into()); }
             sleep(Duration::from_millis(10));
         }
@@ -317,23 +351,17 @@ impl Target {
         }
         Err("无法确认 WeGame 输入框焦点，已停止填入".into())
     }
-    fn observe(&self, field: Field, layout: HKL, budget: &Budget, duration: Duration) -> Result<()> {
+    fn observe(&self, field: Field, plan: &HidPlan, budget: &Budget, duration: Duration) -> Result<()> {
         let start = Instant::now();
         loop {
-            self.guard(field, layout, budget)?;
+            self.guard(field, plan.layout, budget)?;
+            if (unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0) != plan.caps {
+                return Err("CapsLock 状态已变化，已停止填入，请检查当前内容".into());
+            }
+            ime_closed(self.element(field))?;
             if start.elapsed() >= duration { return Ok(()); }
-            sleep(Duration::from_millis(10));
+            sleep(Duration::from_millis(4).min(duration.saturating_sub(start.elapsed())));
         }
-    }
-    fn password_message(&self, layout: HKL, budget: &Budget, message: u32, w: WPARAM, l: LPARAM) -> Result<()> {
-        self.guard(Field::Password, layout, budget)?;
-        modifiers_released()?;
-        let mut response = 0_usize;
-        let completed = unsafe { SendMessageTimeoutW(self.password, message, w, l,
-            SMTO_BLOCK | SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, budget.message_ms()?, Some(&mut response)) };
-        if completed.0 == 0 { return Err("WeGame 密码控件未响应，已停止填入；请检查当前内容".into()); }
-        // 消息返回值不表示安全组件已接收密码，必须继续观察真实焦点状态。
-        self.guard(Field::Password, layout, budget)
     }
 }
 
@@ -352,94 +380,110 @@ fn mouse(x: i32, y: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Key { scan: u16, extended: bool }
-#[derive(Clone, Copy)]
-struct KeyEvent { key: Key, up: bool }
 fn scan(vk: VIRTUAL_KEY, layout: HKL) -> Result<Key> {
     let code = unsafe { MapVirtualKeyExW(u32::from(vk.0), MAPVK_VK_TO_VSC_EX, layout) };
     if code == 0 || code & 0xff00 == 0xe100 { return Err("当前键盘布局不支持自动填入，请切换英文输入法后重试".into()); }
     Ok(Key { scan: (code & 0xff) as u16, extended: code & 0xff00 == 0xe000 })
 }
-fn keyboard(event: KeyEvent) -> INPUT {
-    let mut flags = KEYEVENTF_SCANCODE;
-    if event.up { flags |= KEYEVENTF_KEYUP; }
-    if event.key.extended { flags |= KEYEVENTF_EXTENDEDKEY; }
-    INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wScan: event.key.scan, dwFlags: flags, ..Default::default() } } }
-}
 fn shift_required(vk: u16, required: bool, caps: bool) -> bool { required ^ (caps && (0x41..=0x5a).contains(&vk)) }
-fn append_key(events: &mut Vec<KeyEvent>, key: Key) { events.push(KeyEvent { key, up: false }); events.push(KeyEvent { key, up: true }); }
-fn account_plan(value: &str, layout: HKL, caps: bool) -> Result<Vec<KeyEvent>> {
-    let shift = scan(VK_LSHIFT, layout)?;
-    let mut result = Vec::new();
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HidKey { modifiers: u8, usage: u8 }
+struct HidPlan { layout: HKL, caps: bool, keys: Vec<HidKey>, clear: [HidKey; 2] }
+
+fn prepare(value: &str, layout: HKL) -> Result<HidPlan> {
+    if !valid_text(value) || layout.0.is_null() { return Err("字符或键盘布局不受支持，未修改输入框".into()); }
+    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    let mut keys = Vec::new();
     for ch in value.bytes() {
         let mapping = unsafe { VkKeyScanExW(u16::from(ch), layout) };
-        if mapping == -1 || (mapping as u16 >> 8) & !1 != 0 { return Err("当前键盘布局无法安全输入账号，请切换英文输入法后重试".into()); }
+        if mapping == -1 || (mapping as u16 >> 8) & !1 != 0 { return Err("当前键盘布局无法安全输入账号密码，请切换英文输入法后重试".into()); }
         let vk = mapping as u16 & 0xff;
         let key = scan(VIRTUAL_KEY(vk), layout)?;
         let shifted = shift_required(vk, mapping as u16 & 0x100 != 0, caps);
-        if shifted { result.push(KeyEvent { key: shift, up: false }); }
-        append_key(&mut result, key);
-        if shifted { result.push(KeyEvent { key: shift, up: true }); }
+        let mut state = [0_u8; 256];
+        state[VK_CAPITAL.0 as usize] = u8::from(caps);
+        if shifted { state[VK_SHIFT.0 as usize] = 0x80; }
+        let mut output = [0_u16; 8];
+        // Bit 2 prevents ToUnicodeEx from changing the keyboard dead-key state.
+        let count = unsafe { ToUnicodeEx(u32::from(vk), u32::from(key.scan), &state, &mut output, 4, layout) };
+        if count != 1 || output[0] != u16::from(ch) { return Err("字符无法在目标键盘布局中原样输入，未修改输入框".into()); }
+        keys.push(HidKey { modifiers: if shifted { 2 } else { 0 }, usage: wegame_hid::usage(key.scan, key.extended)? });
     }
-    Ok(result)
+    let a = scan(VK_A, layout)?;
+    let back = scan(VK_BACK, layout)?;
+    let a = wegame_hid::usage(a.scan, a.extended)?;
+    let back = wegame_hid::usage(back.scan, back.extended)?;
+    if a != 0x04 || back != 0x2a { return Err("当前键盘布局的清空组合尚未适配，未修改输入框".into()); }
+    Ok(HidPlan { layout, caps, keys, clear: [HidKey { modifiers: 1, usage: a }, HidKey { modifiers: 0, usage: back }] })
 }
-fn held_after(events: &[KeyEvent], inserted: usize) -> BTreeSet<Key> {
-    let mut held = BTreeSet::new();
-    for event in events.iter().take(inserted) {
-        if event.up { held.remove(&event.key); } else { held.insert(event.key); }
-    }
-    held
-}
-fn send_account_keys(target: &Target, layout: HKL, budget: &Budget, events: &[KeyEvent]) -> Result<()> {
-    target.guard(Field::Account, layout, budget)?;
-    modifiers_released()?;
-    let input: Vec<_> = events.iter().copied().map(keyboard).collect();
-    let inserted = unsafe { SendInput(&input, size_of::<INPUT>() as i32) } as usize;
-    if inserted != input.len() {
-        for key in held_after(events, inserted) { unsafe { SendInput(&[keyboard(KeyEvent { key, up: true })], size_of::<INPUT>() as i32); } }
-        return Err("WeGame 未完整接收账号按键，已停止填入；请检查当前内容".into());
-    }
-    target.observe(Field::Account, layout, budget, Duration::from_millis(20))
-}
-fn char_flags(key: Key) -> LPARAM { LPARAM(1_isize | ((key.scan as isize) << 16) | if key.extended { 1_isize << 24 } else { 0 }) }
 
-/// 在阻塞工作线程调用。Ok 只能在界面显示“已发送填入，请检查 WeGame”，不能声称密码核验成功。
-pub fn fill_credentials(account: &str, password: &str) -> Result<()> {
+fn ime_closed(hwnd: HWND) -> Result<()> {
+    let context = unsafe { ImmGetContext(hwnd) };
+    if context.0.is_null() { return Ok(()); }
+    let open = unsafe { ImmGetOpenStatus(context).as_bool() };
+    unsafe { let _ = ImmReleaseContext(hwnd, context); }
+    if open { Err("目标输入法处于组合输入模式，请切到英文后重新填入".into()) } else { Ok(()) }
+}
+
+trait Sink { fn state(&mut self, modifiers: u8, key: u8) -> Result<()>; }
+impl Sink for Keyboard { fn state(&mut self, modifiers: u8, key: u8) -> Result<()> { self.state(modifiers, key) } }
+fn press_guarded(sink: &mut impl Sink, key: HidKey, mut wait: impl FnMut(Duration) -> Result<()>) -> Result<()> {
+    wait(Duration::ZERO)?;
+    let down = sink.state(key.modifiers, key.usage);
+    let held = down.and_then(|_| wait(KEY_HOLD));
+    // Even failed writes may have reached the device. Always release, including
+    // after cancellation/focus loss, before propagating the original error.
+    sink.state(0, 0).map_err(|error| format!("{error}；松键未确认，请停止填入并检查键盘状态"))?;
+    held?;
+    wait(KEY_GAP)
+}
+fn fill_field(device: &mut Keyboard, target: &Target, field: Field, plan: &HidPlan, budget: &Budget) -> Result<()> {
+    target.click(field, plan.layout, budget)?;
+    let mut wait = |time| target.observe(field, plan, budget, time);
+    wait(Duration::from_millis(20))?;
+    for key in plan.clear.iter().chain(&plan.keys) {
+        modifiers_released()?;
+        press_guarded(device, *key, &mut wait)?;
+    }
+    wait(Duration::from_millis(if field == Field::Password { 100 } else { 40 }))
+}
+fn with_keyboard<K>(open: impl FnOnce() -> Result<Option<K>>, work: impl FnOnce(K) -> Result<FillOutcome>) -> Result<FillOutcome> {
+    match open()? {
+        Some(device) => work(device),
+        None => Ok(FillOutcome::DriverRequired),
+    }
+}
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillOutcome { InputSent, DriverRequired }
+
+fn valid_account(account: &str) -> bool { (5..=12).contains(&account.len()) && account.bytes().all(|b| b.is_ascii_digit()) }
+
+/// Blocking worker only. The user must check the client and initiate login.
+pub fn fill_credentials(account: &str, password: &str) -> Result<FillOutcome> {
     let _lock = FILL_LOCK.try_lock().map_err(|_| "正在填入 WeGame，请稍候".to_string())?;
-    if !valid_text(account) || !valid_text(password) { return Err("自动填入支持 128 个以内的可打印英文、数字和符号，未修改输入框".into()); }
+    let _component_lock = crate::wegame_component::lock_operation()?;
+    if !valid_account(account) { return Err("当前已适配 WeGame 的 QQ 数字账号登录页，需要 5–12 位数字账号；未修改输入框".into()); }
+    if !valid_text(password) { return Err("自动填入支持 128 个以内的可打印英文、数字和符号密码，未修改输入框".into()); }
     let budget = Budget::new();
     budget.check()?;
-    modifiers_released()?;
-    let target = discover(&budget)?;
-    target.activation_stable(&budget)?;
-    let account_layout = unsafe { GetKeyboardLayout(GetWindowThreadProcessId(target.account, None)) };
-    let password_layout = unsafe { GetKeyboardLayout(GetWindowThreadProcessId(target.password, None)) };
-    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
-    // 所有字符和清空按键在修改输入框之前完成预检。
-    let account_keys = account_plan(account, account_layout, caps)?;
-    let control = scan(VK_LCONTROL, account_layout)?;
-    let mut clear_keys = vec![KeyEvent { key: control, up: false }];
-    append_key(&mut clear_keys, scan(VK_A, account_layout)?);
-    clear_keys.push(KeyEvent { key: control, up: true });
-    append_key(&mut clear_keys, scan(VK_BACK, account_layout)?);
-    let backspace = char_flags(scan(VK_BACK, password_layout)?);
-    let mut password_chars = Vec::new();
-    for ch in password.bytes() {
-        let mapping = unsafe { VkKeyScanExW(u16::from(ch), password_layout) };
-        if mapping == -1 { return Err("当前键盘布局不支持密码中的字符，未修改输入框".into()); }
-        password_chars.push((WPARAM(usize::from(ch)), char_flags(scan(VIRTUAL_KEY(mapping as u16 & 0xff), password_layout)?)));
-    }
-    target.click(Field::Account, account_layout, &budget)?;
-    send_account_keys(&target, account_layout, &budget, &clear_keys)?;
-    if (unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0) != caps { return Err("CapsLock 状态已变化，已停止填入，请检查当前内容".into()); }
-    send_account_keys(&target, account_layout, &budget, &account_keys)?;
-    // 先完成账号，再处理密码，避免账号变化异步重置已经填好的密码。
-    target.click(Field::Password, password_layout, &budget)?;
-    target.password_message(password_layout, &budget, EM_SETSEL, WPARAM(0), LPARAM(-1))?;
-    target.password_message(password_layout, &budget, WM_CHAR, WPARAM(8), backspace)?;
-    target.observe(Field::Password, password_layout, &budget, Duration::from_millis(120))?;
-    // 每栏先执行清空再填写；任何拒绝/失焦都不重试或切换输入方法。
-    for (ch, flags) in password_chars { target.password_message(password_layout, &budget, WM_CHAR, ch, flags)?; }
-    target.observe(Field::Password, password_layout, &budget, Duration::from_millis(350))
+    // Missing/busy drivers fail before discovering or restoring any window.
+    with_keyboard(Keyboard::open, |mut device| {
+        modifiers_released()?;
+        let candidate = discover(&budget)?;
+        let (account_layout, password_layout) = candidate.layouts()?;
+        let account_plan = prepare(account, account_layout)?;
+        let password_plan = prepare(password, password_layout)?;
+        ime_closed(candidate.account)?;
+        for edit in &candidate.edits { ime_closed(*edit)?; }
+        if candidate.layouts()? != (account_layout, password_layout) { return Err("键盘布局已变化，未修改输入框".into()); }
+        let target = candidate.activate(&budget)?;
+        target.activation_stable(&budget)?;
+        fill_field(&mut device, &target, Field::Account, &account_plan, &budget)?;
+        fill_field(&mut device, &target, Field::Password, &password_plan, &budget)?;
+        device.release()?;
+        Ok(FillOutcome::InputSent)
+    })
 }
 
 #[cfg(test)]
@@ -460,7 +504,8 @@ mod tests {
     fn login_profile_scales_and_rejects_unrelated_or_auxiliary_rectangles() {
         let normal = Layout::new(960, 540).unwrap();
         let scaled = Layout::new(1200, 675).unwrap();
-        assert_eq!(scaled.point(Field::Password).x, 600);
+        assert_eq!(scaled.point(Field::Account).x, 600);
+        assert_eq!(scaled.point(Field::Account).y, 415);
         assert_eq!(scaled.point(Field::Password).y, 466);
         assert!(Layout::new(1200, 800).is_none());
         assert!(Layout::new(0, 0).is_none());
@@ -473,26 +518,67 @@ mod tests {
         assert!(!valid_text(&"a".repeat(MAX_CHARS + 1)));
     }
     #[test]
-    fn partial_key_batches_only_release_keys_that_were_actually_pressed() {
-        let control = Key { scan: 0x1d, extended: false };
-        let letter = Key { scan: 0x1e, extended: false };
-        let events = [KeyEvent { key: control, up: false }, KeyEvent { key: letter, up: false },
-            KeyEvent { key: letter, up: true }, KeyEvent { key: control, up: true }];
-        assert!(held_after(&events, 0).is_empty());
-        assert_eq!(held_after(&events, 1), BTreeSet::from([control]));
-        assert_eq!(held_after(&events, 2), BTreeSet::from([control, letter]));
-        assert_eq!(held_after(&events, 3), BTreeSet::from([control]));
-        assert!(held_after(&events, 4).is_empty());
+    fn unsupported_accounts_fail_before_discovery_or_input() {
+        assert!(valid_account("1234567890"));
+        for invalid in ["", "1234", "1234567890123", "dummy", "12345a", "12345\n"] { assert!(!valid_account(invalid)); }
     }
     #[test]
-    fn key_flags_and_caps_lock_keep_punctuation_literal() {
-        assert_eq!(char_flags(Key { scan: 0x1e, extended: false }).0, 0x1e0001);
-        assert_eq!(char_flags(Key { scan: 0x1e, extended: true }).0, 0x11e0001);
+    fn caps_lock_and_virtual_desktop_mapping_keep_literal_input() {
         assert!(shift_required(0x41, false, true));
         assert!(!shift_required(0x41, true, true));
         assert!(shift_required(0x31, true, true));
         assert_eq!(normalize(-1920, -1920, 3840), Some(0));
         assert_eq!(normalize(1919, -1920, 3840), Some(65535));
         assert_eq!(normalize(1920, -1920, 3840), None);
+    }
+    #[test]
+    fn missing_keyboard_never_reaches_target_or_clear() {
+        let mut touched = false;
+        let result = with_keyboard(|| Ok(None::<()>), |_| { touched = true; Ok(FillOutcome::InputSent) });
+        assert_eq!(result.unwrap(), FillOutcome::DriverRequired);
+        assert!(!touched);
+        let result = with_keyboard(|| Err::<Option<()>, _>("fixture busy device".into()), |_| { touched = true; Ok(FillOutcome::InputSent) });
+        assert!(result.is_err());
+        assert!(!touched);
+    }
+    #[derive(Default)]
+    struct FakeSink { reports: Vec<(u8, u8)>, fail_down: bool, fail_release: bool }
+    impl Sink for FakeSink {
+        fn state(&mut self, modifiers: u8, key: u8) -> Result<()> {
+            self.reports.push((modifiers, key));
+            if (key != 0 && self.fail_down) || (key == 0 && self.fail_release) { Err("fixture I/O error".into()) } else { Ok(()) }
+        }
+    }
+    #[test]
+    fn cancellation_and_focus_loss_always_release_pressed_keys() {
+        let mut sink = FakeSink::default();
+        let result = press_guarded(&mut sink, HidKey { modifiers: 2, usage: 4 }, |time|
+            if time == KEY_HOLD { Err("fixture focus lost".into()) } else { Ok(()) });
+        assert!(result.is_err());
+        assert_eq!(sink.reports, [(2, 4), (0, 0)]);
+    }
+    #[test]
+    fn uncertain_down_writes_release_and_release_errors_are_not_success() {
+        for (fail_down, fail_release) in [(true, false), (false, true)] {
+            let mut sink = FakeSink { fail_down, fail_release, ..Default::default() };
+            assert!(press_guarded(&mut sink, HidKey { modifiers: 0, usage: 4 }, |_| Ok(())).is_err());
+            assert_eq!(sink.reports, [(0, 4), (0, 0)]);
+        }
+    }
+    #[test]
+    fn guard_failure_before_press_sends_nothing() {
+        let mut sink = FakeSink::default();
+        assert!(press_guarded(&mut sink, HidKey { modifiers: 0, usage: 4 }, |_| Err("fixture cancelled".into())).is_err());
+        assert!(sink.reports.is_empty());
+    }
+    #[test]
+    fn printable_fixture_plans_are_complete_before_input() {
+        let layout = unsafe { GetKeyboardLayout(0) };
+        for text in ["1234567890", "a7B!", "GrTest!24", "GrMix!24A?"] {
+            let plan = prepare(text, layout).unwrap();
+            assert_eq!(plan.keys.len(), text.len());
+            assert_eq!(plan.clear, [HidKey { modifiers: 1, usage: 4 }, HidKey { modifiers: 0, usage: 0x2a }]);
+        }
+        for text in ["", "test\r", "test\n", "test\t", "测试"] { assert!(prepare(text, layout).is_err()); }
     }
 }
