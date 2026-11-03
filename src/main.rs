@@ -32,6 +32,7 @@ mod backup_settings;
 mod account_store;
 mod lol_accounts;
 mod wegame;
+mod wegame_page;
 mod wegame_hid;
 mod wegame_component;
 mod update;

@@ -2,6 +2,7 @@
 //! 受保护密码通过 FakerInput 虚拟 HID 键盘输入；缺组件时由界面引导安装。
 //! 不读取密码控件、不使用剪贴板、不发送回车、不自动安装驱动。
 use crate::wegame_hid::{self, Keyboard};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::sync::Mutex;
@@ -22,6 +23,44 @@ const REJECTED: &str = "WeGame 未正常接收密码输入，已停止填入；�
 const MAX_CHARS: usize = 128;
 const KEY_HOLD: Duration = Duration::from_millis(4);
 const KEY_GAP: Duration = Duration::from_millis(4);
+
+// Restore only the cursor position we set. A user's movement cancels restoration.
+struct CursorRestore { original: POINT, last: Cell<Option<POINT>>, cancelled: Cell<bool> }
+impl CursorRestore {
+    fn capture() -> Result<Self> {
+        let mut original = POINT::default();
+        unsafe { GetCursorPos(&mut original) }.map_err(|_| "无法记录鼠标位置，未开始填入".to_string())?;
+        Ok(Self { original, last: Cell::new(None), cancelled: Cell::new(false) })
+    }
+    fn check(&self) -> Result<()> {
+        let mut actual = POINT::default();
+        unsafe { GetCursorPos(&mut actual) }.map_err(|_| LOST_TARGET.to_string())?;
+        self.observe(actual)
+    }
+    fn observe(&self, actual: POINT) -> Result<()> {
+        if !same_point(actual, self.last.get().unwrap_or(self.original)) { self.cancelled.set(true); }
+        if self.cancelled.get() { Err("检测到鼠标移动，已停止填入，请检查内容后重试".into()) } else { Ok(()) }
+    }
+    fn moved_to(&self, expected: POINT) -> Result<()> {
+        let mut actual = POINT::default();
+        unsafe { GetCursorPos(&mut actual) }.map_err(|_| LOST_TARGET.to_string())?;
+        if (actual.x - expected.x).abs() > 3 || (actual.y - expected.y).abs() > 3 {
+            self.cancelled.set(true);
+            return Err("鼠标位置已变化，已停止填入".into());
+        }
+        self.last.set(Some(actual));
+        Ok(())
+    }
+    fn restore(&self) -> Result<()> {
+        if self.last.get().is_none() || self.cancelled.get() { return Ok(()); }
+        if self.check().is_err() { return Ok(()); }
+        unsafe { SetCursorPos(self.original.x, self.original.y) }.map_err(|_| "填入已结束，但无法恢复鼠标位置".to_string())?;
+        self.last.set(None);
+        Ok(())
+    }
+}
+impl Drop for CursorRestore { fn drop(&mut self) { let _ = self.restore(); } }
+fn same_point(a: POINT, b: POINT) -> bool { a.x == b.x && a.y == b.y }
 
 struct Budget(Instant);
 impl Budget {
@@ -286,13 +325,17 @@ impl Target {
         Ok(())
     }
     fn element(&self, field: Field) -> HWND { if field == Field::Account { self.account } else { self.password } }
+    fn auxiliary_shown(&self) -> Result<bool> {
+        Ok(has_visible_area(unsafe { IsWindowVisible(self.auxiliary).as_bool() }, child_bounds(self.root, self.auxiliary)?))
+    }
     fn screen_point(&self, field: Field) -> Result<POINT> {
         let mut point = self.layout.point(field);
         if !unsafe { ClientToScreen(self.root, &mut point).as_bool() } { return Err(LOST_TARGET.into()); }
         Ok(point)
     }
-    fn guard(&self, field: Field, layout: HKL, budget: &Budget) -> Result<()> {
+    fn guard(&self, field: Field, layout: HKL, budget: &Budget, cursor: &CursorRestore) -> Result<()> {
         budget.check()?;
+        cursor.check()?;
         self.foreground()?;
         let focused = current_focus()?;
         if focused == self.auxiliary { return Err(REJECTED.into()); }
@@ -307,12 +350,13 @@ impl Target {
         }
         Ok(())
     }
-    fn activation_stable(&self, budget: &Budget) -> Result<()> {
+    fn activation_stable(&self, budget: &Budget, cursor: &CursorRestore) -> Result<()> {
         let start = Instant::now();
         let mut last_focus = current_focus()?;
         let mut changed = start;
         loop {
             budget.check()?;
+            cursor.check()?;
             self.foreground()?;
             let focus = current_focus()?;
             if !focus.is_invalid() && unsafe { GetAncestor(focus, GA_ROOT) } != self.root { return Err(LOST_TARGET.into()); }
@@ -323,13 +367,19 @@ impl Target {
             sleep(Duration::from_millis(10));
         }
     }
-    fn click(&self, field: Field, layout: HKL, budget: &Budget) -> Result<()> {
+    fn click_point(&self, point: POINT, budget: &Budget, cursor: &CursorRestore, switching_page: bool) -> Result<()> {
         budget.check()?;
         self.foreground()?;
+        cursor.check()?;
         modifiers_released()?;
-        // 辅助 Edit 是已观察到的拒绝状态，不通过重新聚焦继续尝试。
-        if current_focus()? == self.auxiliary { return Err(REJECTED.into()); }
-        let point = self.screen_point(field)?;
+        // Switching back to quick login can leave focus on an invisible Edit.
+        // Only the recognized page-switch link may be clicked in that state;
+        // credential input still treats auxiliary focus as rejection.
+        let password_visible = unsafe { IsWindowVisible(self.password).as_bool() };
+        let auxiliary_visible = self.auxiliary_shown()?;
+        if !click_state_allowed(switching_page, password_visible, auxiliary_visible, current_focus()? == self.auxiliary) {
+            return Err(REJECTED.into());
+        }
         if unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) } != self.root { return Err("WeGame 输入框被其他窗口遮挡，请关闭遮挡后重试".into()); }
         let x = normalize(point.x, unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) }, unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) });
         let y = normalize(point.y, unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) }, unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) });
@@ -337,24 +387,55 @@ impl Target {
         let events = [mouse(x, y, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK),
             mouse(0, 0, MOUSEEVENTF_LEFTDOWN), mouse(0, 0, MOUSEEVENTF_LEFTUP)];
         let inserted = unsafe { SendInput(&events, size_of::<INPUT>() as i32) };
+        let positioned = if inserted > 0 { cursor.moved_to(point) } else { Ok(()) };
         if inserted != events.len() as u32 {
             if inserted >= 2 { unsafe { SendInput(&[mouse(0, 0, MOUSEEVENTF_LEFTUP)], size_of::<INPUT>() as i32); } }
             return Err("无法完整点击 WeGame 输入框，已停止填入".into());
         }
+        positioned
+    }
+    fn ensure_password_page(&self, budget: &Budget, cursor: &CursorRestore) -> Result<()> {
+        let check = || { budget.check()?; cursor.check()?; self.foreground() };
+        check()?;
+        if unsafe { IsWindowVisible(self.password).as_bool() } { return Ok(()); }
+        if self.auxiliary_shown()? { return Err(REJECTED.into()); }
+        let hosts: Vec<_> = children(self.root).into_iter().filter(|hwnd| unsafe { GetAncestor(*hwnd, GA_ROOT) } == self.root
+            && class_name(*hwnd) == "CefBrowserWindow" && unsafe { IsWindowVisible(*hwnd).as_bool() }
+            && child_bounds(self.root, *hwnd).is_ok_and(|r| self.layout.matches(r, self.layout.client()))).collect();
+        if hosts.len() != 1 { return Err("WeGame 登录页面尚未就绪，请稍后重试".into()); }
+        if !crate::wegame_page::has_password_login_link(self.root, self.layout.width, self.layout.height, check)? {
+            return Err("未识别到 QQ 账号密码登录入口，请等待页面加载完成或手动切换后重试".into());
+        }
+        check()?;
+        let mut point = POINT { x: self.layout.x(480), y: self.layout.y(500) };
+        if !unsafe { ClientToScreen(self.root, &mut point).as_bool() } { return Err(LOST_TARGET.into()); }
+        self.click_point(point, budget, cursor, true)?;
+        let started = Instant::now();
+        loop {
+            check()?;
+            if unsafe { IsWindowVisible(self.password).as_bool() } {
+                return self.activation_stable(budget, cursor);
+            }
+            if started.elapsed() >= Duration::from_millis(800) { return Err("WeGame 未切换到账号密码登录页，未修改输入框".into()); }
+            sleep(Duration::from_millis(10));
+        }
+    }
+    fn click(&self, field: Field, layout: HKL, budget: &Budget, cursor: &CursorRestore) -> Result<()> {
+        self.click_point(self.screen_point(field)?, budget, cursor, false)?;
         for _ in 0..15 {
             budget.check()?;
             self.foreground()?;
             let focus = current_focus()?;
             if focus == self.auxiliary { return Err(REJECTED.into()); }
-            if focus == self.element(field) { return self.guard(field, layout, budget); }
+            if focus == self.element(field) { return self.guard(field, layout, budget, cursor); }
             sleep(Duration::from_millis(10));
         }
         Err("无法确认 WeGame 输入框焦点，已停止填入".into())
     }
-    fn observe(&self, field: Field, plan: &HidPlan, budget: &Budget, duration: Duration) -> Result<()> {
+    fn observe(&self, field: Field, plan: &HidPlan, budget: &Budget, duration: Duration, cursor: &CursorRestore) -> Result<()> {
         let start = Instant::now();
         loop {
-            self.guard(field, plan.layout, budget)?;
+            self.guard(field, plan.layout, budget, cursor)?;
             if (unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0) != plan.caps {
                 return Err("CapsLock 状态已变化，已停止填入，请检查当前内容".into());
             }
@@ -366,6 +447,10 @@ impl Target {
 }
 
 fn valid_text(value: &str) -> bool { !value.is_empty() && value.len() <= MAX_CHARS && value.bytes().all(|b| (0x20..=0x7e).contains(&b)) }
+fn has_visible_area(visible: bool, bounds: Bounds) -> bool { visible && bounds.width() > 0 && bounds.height() > 0 }
+fn click_state_allowed(switching_page: bool, password_visible: bool, auxiliary_visible: bool, auxiliary_focused: bool) -> bool {
+    if switching_page { !password_visible && !auxiliary_visible } else { password_visible && !auxiliary_focused && !auxiliary_visible }
+}
 fn modifiers_released() -> Result<()> {
     if [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN].iter().any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) } < 0) {
         Err("请松开 Ctrl、Shift、Alt、Win 键后重新填入".into())
@@ -437,9 +522,9 @@ fn press_guarded(sink: &mut impl Sink, key: HidKey, mut wait: impl FnMut(Duratio
     held?;
     wait(KEY_GAP)
 }
-fn fill_field(device: &mut Keyboard, target: &Target, field: Field, plan: &HidPlan, budget: &Budget) -> Result<()> {
-    target.click(field, plan.layout, budget)?;
-    let mut wait = |time| target.observe(field, plan, budget, time);
+fn fill_field(device: &mut Keyboard, target: &Target, field: Field, plan: &HidPlan, budget: &Budget, cursor: &CursorRestore) -> Result<()> {
+    target.click(field, plan.layout, budget, cursor)?;
+    let mut wait = |time| target.observe(field, plan, budget, time, cursor);
     wait(Duration::from_millis(20))?;
     for key in plan.clear.iter().chain(&plan.keys) {
         modifiers_released()?;
@@ -477,11 +562,14 @@ pub fn fill_credentials(account: &str, password: &str) -> Result<FillOutcome> {
         ime_closed(candidate.account)?;
         for edit in &candidate.edits { ime_closed(*edit)?; }
         if candidate.layouts()? != (account_layout, password_layout) { return Err("键盘布局已变化，未修改输入框".into()); }
+        let cursor = CursorRestore::capture()?;
         let target = candidate.activate(&budget)?;
-        target.activation_stable(&budget)?;
-        fill_field(&mut device, &target, Field::Account, &account_plan, &budget)?;
-        fill_field(&mut device, &target, Field::Password, &password_plan, &budget)?;
+        target.activation_stable(&budget, &cursor)?;
+        target.ensure_password_page(&budget, &cursor)?;
+        fill_field(&mut device, &target, Field::Account, &account_plan, &budget, &cursor)?;
+        fill_field(&mut device, &target, Field::Password, &password_plan, &budget, &cursor)?;
         device.release()?;
+        cursor.restore()?;
         Ok(FillOutcome::InputSent)
     })
 }
@@ -489,6 +577,28 @@ pub fn fill_credentials(account: &str, password: &str) -> Result<FillOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hidden_quick_page_focus_only_allows_the_recognized_page_switch() {
+        // WeGame leaves WS_VISIBLE set on a zero-height auxiliary Edit after
+        // switching back to quick login. It is not a displayed rejection field.
+        assert!(!has_visible_area(true, Bounds { left: 410, top: 102, right: 550, bottom: 102 }));
+        assert!(has_visible_area(true, Bounds { left: 410, top: 102, right: 550, bottom: 122 }));
+        assert!(click_state_allowed(true, false, false, true));
+        assert!(!click_state_allowed(false, false, false, true));
+        assert!(!click_state_allowed(false, true, false, true));
+        assert!(!click_state_allowed(true, false, true, true));
+        assert!(!click_state_allowed(true, true, false, false));
+        assert!(click_state_allowed(false, true, false, false));
+    }
+    #[test]
+    fn user_cursor_movement_cancels_even_if_it_returns_to_the_original_position() {
+        let original = POINT { x: 10, y: 20 };
+        let cursor = CursorRestore { original, last: Cell::new(None), cancelled: Cell::new(false) };
+        assert!(cursor.observe(original).is_ok());
+        assert!(cursor.observe(POINT { x: 11, y: 20 }).is_err());
+        assert!(cursor.observe(original).is_err());
+        assert!(cursor.cancelled.get());
+    }
     fn process(name: &str, parent: Option<u32>) -> ProcessInfo { ProcessInfo { parent, name: name.into() } }
     #[test]
     fn separate_clients_and_cyclic_process_graphs_never_merge() {

@@ -24,6 +24,7 @@ static CLIENT: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_strin
 struct SavedAccount {
     password: String,
     favorite: bool,
+    added_order: u64,
     updated_ms: i64,
     synced_digest: Option<String>,
     #[serde(flatten)]
@@ -199,7 +200,11 @@ fn save_account_at(path: &Path, name: &str, password: &str) -> Result<()> {
     if !backup::valid_credential(name, password) { return Err(error("format_error", "请输入有效账号和密码，不能包含换行或账号分隔符", false)); }
     edit_at(path, |store| {
         let variants: Vec<_> = store.accounts.keys().filter(|key| key.eq_ignore_ascii_case(name)).cloned().collect();
-        if variants.is_empty() { store.accounts.insert(name.into(), SavedAccount::default()); }
+        if variants.is_empty() {
+            let added_order = store.accounts.values().map(|a| a.added_order).max().unwrap_or(0)
+                .checked_add(1).ok_or_else(|| error("local_error", "账号顺序数据超出范围，原文件未修改", false))?;
+            store.accounts.insert(name.into(), SavedAccount { added_order, ..Default::default() });
+        }
         for (key, a) in &mut store.accounts {
             if key.eq_ignore_ascii_case(name) {
                 if a.password != password { a.synced_digest = None; store.manual_pending.remove(&key.to_ascii_lowercase()); }
@@ -212,14 +217,21 @@ fn save_account_at(path: &Path, name: &str, password: &str) -> Result<()> {
 
 #[tauri::command]
 pub fn lol_accounts_list() -> Result<Vec<Account>> {
-    let store = load()?;
-    let mut merged = BTreeMap::<String, Account>::new();
+    Ok(list_accounts(load()?))
+}
+fn list_accounts(store: Store) -> Vec<Account> {
+    let mut merged = BTreeMap::<String, (u64, Account)>::new();
     for (name, value) in store.accounts {
         let key = name.to_ascii_lowercase();
-        if let Some(existing) = merged.get_mut(&key) { existing.favorite |= value.favorite; }
-        else { merged.insert(key, Account { account_name: name, password: value.password, favorite: value.favorite }); }
+        if let Some((order, existing)) = merged.get_mut(&key) {
+            *order = (*order).max(value.added_order); existing.favorite |= value.favorite;
+        } else { merged.insert(key, (value.added_order, Account { account_name: name, password: value.password, favorite: value.favorite })); }
     }
-    Ok(merged.into_values().collect())
+    let mut accounts: Vec<_> = merged.into_values().collect();
+    // Stable sorting retains the legacy alphabetical order for records with no
+    // insertion metadata. Edits and favorites never change the insertion order.
+    accounts.sort_by_key(|(order, _)| std::cmp::Reverse(*order));
+    accounts.into_iter().map(|(_, account)| account).collect()
 }
 #[tauri::command]
 pub fn lol_account_save(account_name: String, password: String) -> Result<()> {
@@ -426,6 +438,25 @@ mod tests {
         assert_eq!(fs::read(f.0.join("accounts.json")).unwrap(), b"Steam fixture untouched");
         fs::write(&p, b"broken").unwrap();
         assert!(save_account_at(&p, "other", "secret").is_err()); assert_eq!(fs::read(&p).unwrap(), b"broken");
+    }
+    #[test]
+    fn new_accounts_prepend_and_survive_reload_without_reordering_edits() {
+        let f = Fixture::new(); let p = f.path();
+        fs::write(&p, br#"{"version":1,"accounts":{"Alpha":{"password":"old-a","favorite":true},"Beta":{"password":"old-b"}}}"#).unwrap();
+        let names = |store| list_accounts(store).into_iter().map(|a| a.account_name).collect::<Vec<_>>();
+        assert_eq!(names(read(&p).unwrap()), ["Alpha", "Beta"]);
+        save_account_at(&p, "Zulu", "fixture-z").unwrap();
+        save_account_at(&p, "Middle", "fixture-m").unwrap();
+        assert_eq!(names(read(&p).unwrap()), ["Middle", "Zulu", "Alpha", "Beta"]);
+        save_account_at(&p, "ALPHA", "updated-a").unwrap();
+        edit_at(&p, |s| { s.accounts.get_mut("Beta").unwrap().favorite = true; Ok(()) }).unwrap();
+        let store = read(&p).unwrap();
+        assert!(store.accounts["Alpha"].favorite);
+        assert_eq!(store.accounts["Alpha"].password, "updated-a");
+        assert_eq!(names(store), ["Middle", "Zulu", "Alpha", "Beta"]);
+        edit_at(&p, |s| { s.accounts.remove("Zulu"); Ok(()) }).unwrap();
+        save_account_at(&p, "Zulu", "recreated-z").unwrap();
+        assert_eq!(names(read(&p).unwrap()), ["Zulu", "Middle", "Alpha", "Beta"]);
     }
     #[test]
     fn stale_sync_receipts_do_not_restore_deleted_or_changed_credentials() {

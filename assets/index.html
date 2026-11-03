@@ -199,13 +199,15 @@ body.rail-dragging{ cursor:grabbing; }
 #page-lol .stat{ padding:5px 6px; }
 #page-lol .stat .num{ font-size:14px; }
 #page-lol .stat .lbl{ font-size:9px; margin-top:1px; }
-.lol-account{ flex:none; min-height:70px; gap:7px; padding:8px; }
+#lolCards{ gap:6px; }
+#lolCards .lol-account{ flex:none; min-height:56px; gap:7px; padding:6px 8px; }
+#lolCards .acct-favorite{ width:28px; height:28px; font-size:22px; }
 .lol-account .acct-info{ user-select:text; }
-.lol-credential{ display:flex; gap:7px; min-width:0; font:12px/1.65 "Cascadia Mono","Consolas",monospace; }
-.lol-credential .label{ color:var(--txt3); flex:none; font:10px/1.98 "Microsoft YaHei",sans-serif; }
+.lol-credential{ display:flex; gap:7px; min-width:0; font:12px/1.5 "Cascadia Mono","Consolas",monospace; }
+.lol-credential .label{ color:var(--txt3); flex:none; font:10px/1.8 "Microsoft YaHei",sans-serif; }
 .lol-credential .value{ min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
-.lol-account-actions{ display:flex; flex-direction:column; gap:4px; flex:none; }
-.lol-account-actions .btn{ padding:2px 7px; font-size:10px; }
+.lol-account-actions{ display:flex; flex-direction:column; gap:2px; flex:none; }
+.lol-account-actions .btn{ padding:2px 7px; font-size:10px; line-height:14px; }
 #lolCancelEdit[hidden]{ display:none; }
 #lolCards .acct-favorite:focus-visible{ outline-color:var(--lol); }
 
@@ -2029,9 +2031,10 @@ renderBackupQueue([]);
 /* ---------- LOL 账号：明文资料与收藏均来自便携 Data ---------- */
 let lolAccounts = [], lolAccountsReading = false, lolAccountsStale = false, lolAccountsError = '';
 let lolAccountBusy = false, lolEditing = null, lolFillingAccount = null;
+let lolScrollToNewAccount = null;
 function renderLolAccounts(){
   $('lolAcctCnt').textContent=String(lolAccounts.length);
-  const list=$('lolCards'); list.replaceChildren();
+  const list=$('lolCards'), previousScroll=list.scrollTop; list.replaceChildren();
   if(!lolAccounts.length){ list.appendChild(el('div','logs-empty','暂无账号，请在上方添加')); return; }
   for(const account of lolAccounts){
     const filling=lolFillingAccount===account.account_name;
@@ -2062,6 +2065,9 @@ function renderLolAccounts(){
     fill.addEventListener('click',()=>fillLolWeGame(account)); fillAction.appendChild(fill);
     actions.append(edit,remove); card.append(star,info,fillAction,actions); list.appendChild(card);
   }
+  if(lolScrollToNewAccount && lolAccounts.some(a=>a.account_name.toLowerCase()===lolScrollToNewAccount)){
+    list.scrollTop=0;lolScrollToNewAccount=null;
+  }else list.scrollTop=previousScroll;
 }
 function resetLolEditor(){
   lolEditing=null; $('lolUser').readOnly=false; $('lolUser').value=''; $('lolPass').value='';
@@ -2094,10 +2100,12 @@ async function lolAccountAction(action,account=null){
   if(lolAccountBusy) return;
   if(!hasTauri){ toast(NO_TAURI_MSG,'err'); return; }
   const accountName=account?.account_name || $('lolUser').value.trim(), password=$('lolPass').value;
+  const adding=action==='save' && !lolAccounts.some(a=>a.account_name.toLowerCase()===accountName.toLowerCase());
   if(action==='save' && (!accountName || !password)){ toast('请输入 LOL 账号和密码','err'); return; }
   setLolAccountBusy(true);
   try{
     await invoke('lol_account_'+action,action==='save'?{accountName,password}:action==='favorite'?{accountName,favorite:!account.favorite}:{accountName});
+    if(adding) lolScrollToNewAccount=accountName.toLowerCase();
     if(action==='save' || (action==='delete' && lolEditing?.toLowerCase()===accountName.toLowerCase())) resetLolEditor();
     toast(action==='save'?'LOL 账号已保存':action==='delete'?'LOL 账号已删除':account.favorite?'已取消收藏':'已收藏','ok');
   }catch(e){ toast('LOL 账号更新失败：'+errText(e),'err'); }

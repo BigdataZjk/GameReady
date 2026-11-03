@@ -115,7 +115,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             const index=f.lolAccounts.findIndex(a=>a.account_name.toLowerCase()===args.accountName.toLowerCase());
             if(command==='lol_account_save'){
               const a={account_name:args.accountName,password:args.password,favorite:index>=0?f.lolAccounts[index].favorite:false};
-              if(index>=0) f.lolAccounts[index]=a; else f.lolAccounts.push(a);
+              if(index>=0) f.lolAccounts[index]=a; else f.lolAccounts.unshift(a);
               if(!lolSnapshot.queue.some(row=>row.account===a.account_name)) lolSnapshot.queue.push({account:a.account_name});
             }else if(command==='lol_account_favorite'){if(index<0)throw Error('missing');f.lolAccounts[index].favorite=args.favorite;}
             else if(command==='lol_account_delete'){f.lolAccounts.splice(index,1);lolSnapshot.queue=lolSnapshot.queue.filter(a=>a.account!==args.accountName);}
@@ -1319,6 +1319,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('#lolCards').evaluate(n=>n.scrollHeight>n.clientHeight),true);
     assert.equal(await page.locator('#lolCards').evaluate(n=>n.getBoundingClientRect().bottom<=document.querySelector('#ticker').getBoundingClientRect().top),true);
     await page.screenshot({path:path.resolve(__dirname,'../target/lol-accounts-ui.png')});
+    await page.locator('#lolCards').evaluate(n=>n.scrollTop=n.scrollHeight);
+    assert.ok(await page.locator('#lolCards').evaluate(n=>n.scrollTop)>0);
+    await page.locator('#lolUser').fill('z_newest_fixture');await page.locator('#lolPass').fill('Newest fixture password');
+    await page.locator('#lolSaveAccount').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#lolCards .lol-account').length===9);
+    assert.match(await page.locator('#lolCards .lol-account').first().textContent(),/z_newest_fixture/);
+    assert.equal(await page.locator('#lolCards').evaluate(n=>n.scrollTop),0,'A newly added account is immediately visible at the top');
+    await page.locator('#lolCards .lol-account').first().getByRole('button',{name:'删除 z_newest_fixture'}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#lolCards .lol-account').length===8);
+    console.log('PASS LOL new accounts prepend and scroll to the top');
     await page.locator('#openLolBackup').click();
     await page.waitForFunction(()=>document.querySelector('#lolBackupPath').value==='/backup/lol-accounts.txt');
     const steamConfig=await page.evaluate(()=>structuredClone(window.backupFixture.snapshot.config));

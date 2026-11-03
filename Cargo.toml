@@ -1,6 +1,6 @@
 [package]
 name = "gameready"
-version = "0.1.24"
+version = "0.1.25"
 description = "GameReady - 一键就绪 · 开局即战"
 edition = "2021"
 
@@ -25,6 +25,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # Windows API：注册表 / SetFileTime / ShellExecute / IsWow64Process2
 winreg = "0.52"
 windows = { version = "0.58", features = [
+  "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams",
+  "Win32_System_WinRT",
   "Win32_Storage_FileSystem",
   "Win32_Security",
   "Win32_Security_WinTrust",
