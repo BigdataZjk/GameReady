@@ -46,6 +46,9 @@ struct Store {
     version: u32,
     #[serde(default)]
     accounts: BTreeMap<String, Account>,
+    // 删除后仍需屏蔽 Steam 内存缓存回写的历史；显式重新添加时才取消。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    deleted_accounts: BTreeMap<String, BTreeSet<String>>,
     #[serde(default = "empty_object")]
     backup: Value,
     #[serde(default)]
@@ -58,7 +61,7 @@ struct Store {
 
 impl Default for Store {
     fn default() -> Self {
-        Self { version: VERSION, accounts: BTreeMap::new(), backup: empty_object(),
+        Self { version: VERSION, accounts: BTreeMap::new(), deleted_accounts: BTreeMap::new(), backup: empty_object(),
             unassigned_login_times: BTreeMap::new(), pending_order: Vec::new(), extra: BTreeMap::new() }
     }
 }
@@ -122,8 +125,8 @@ fn preserve_missing_fields(current: &mut Map<String, Value>, previous: &Map<Stri
 /// 将备份模块的完整快照拆回账号字段；调用方已取得中心锁并读入最新文档。
 fn apply_backup(store: &mut Store, value: &Value) -> Result<(), ()> {
     let mut global = value.as_object().cloned().ok_or(())?;
-    let confirmed = string_map(global.remove("confirmed_credentials"))?;
-    let synced = string_map(global.remove("synced_credentials"))?;
+    let mut confirmed = string_map(global.remove("confirmed_credentials"))?;
+    let mut synced = string_map(global.remove("synced_credentials"))?;
     let queue: Vec<Value> = match global.remove("queue") {
         Some(Value::Array(queue)) => queue,
         Some(_) => return Err(()),
@@ -136,6 +139,8 @@ fn apply_backup(store: &mut Store, value: &Value) -> Result<(), ()> {
             || !pending.get("ts_ms").is_some_and(|value| value.as_i64().is_some())
             || pending.get("manual").is_some_and(|value| !value.is_boolean()) { return Err(()); }
     }
+    confirmed.retain(|name, _| !is_deleted(store, name, ""));
+    synced.retain(|name, _| !is_deleted(store, name, ""));
     for account in store.accounts.values_mut() {
         account.confirmed_credential = None;
         account.synced_credential = None;
@@ -163,6 +168,7 @@ fn apply_backup(store: &mut Store, value: &Value) -> Result<(), ()> {
     }
     for pending in queue {
         let name = pending["account"].as_str().ok_or(())?;
+        if is_deleted(store, name, "") { continue; }
         let key = matching_key(&store.accounts, name);
         let account = store.accounts.entry(key.clone()).or_default();
         store.pending_order.push(PendingPosition { account: key, index: account.pending.len() });
@@ -280,6 +286,7 @@ pub fn remove_account(path: &Path, name: &str) -> Result<(), String> {
     let removed_ids: BTreeSet<_> = store.accounts.iter()
         .filter(|(key, _)| key.eq_ignore_ascii_case(name))
         .filter_map(|(_, account)| account.steam_id64.clone()).collect();
+    store.deleted_accounts.entry(name.to_ascii_lowercase()).or_default().extend(removed_ids.iter().cloned());
     store.accounts.retain(|key, _| !key.eq_ignore_ascii_case(name));
     store.unassigned_login_times.retain(|sid, _| !removed_ids.contains(sid));
     // 通常队列与所属账号同名；对历史中错位的队列也按实际账号清理，并重映射索引。
@@ -316,6 +323,7 @@ pub fn remove_account(path: &Path, name: &str) -> Result<(), String> {
 pub fn set_credential(path: &Path, name: &str, password: &str) -> Result<(), String> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut store = load_locked(path)?;
+    store.deleted_accounts.retain(|key, _| !key.eq_ignore_ascii_case(name));
     // 只替换密码；大小写重复记录里的时间、回执、在途队列均继续保留。
     for (key, account) in &mut store.accounts {
         if key.eq_ignore_ascii_case(name) { account.password = None; }
@@ -352,6 +360,15 @@ fn valid_sid(sid64: &str) -> bool {
 
 fn valid_time(timestamp: i64) -> bool { timestamp > 0 && timestamp <= chrono::Utc::now().timestamp().saturating_add(300) }
 
+fn is_deleted(store: &Store, name: &str, sid: &str) -> bool {
+    store.deleted_accounts.iter().any(|(key, ids)| key.eq_ignore_ascii_case(name) || (!sid.is_empty() && ids.contains(sid)))
+}
+
+pub fn read_deleted_accounts(path: &Path) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    Ok(load_locked(path)?.deleted_accounts)
+}
+
 fn login_times(store: &Store) -> BTreeMap<String, i64> {
     let mut times = store.unassigned_login_times.clone();
     for account in store.accounts.values() {
@@ -382,7 +399,7 @@ pub fn merge_login_times(path: &Path, values: &[(String, String, i64)]) -> Resul
 fn merge_login_values(store: &mut Store, values: &[(String, String, i64)]) {
     let mut times = login_times(store);
     for (sid, name, observed) in values {
-        if !valid_sid(sid) { continue; }
+        if !valid_sid(sid) || is_deleted(store, name, sid) { continue; }
         let mut timestamp = times.get(sid).copied().unwrap_or(0).max(if valid_time(*observed) { *observed } else { 0 });
         if name.is_empty() {
             if timestamp > 0 { store.unassigned_login_times.insert(sid.clone(), timestamp); }
@@ -415,7 +432,7 @@ pub fn merge_account_profiles(path: &Path, accounts: &[crate::SteamAccount]) -> 
         (account.steam_id64.clone(), account.account_name.clone(), account.timestamp)).collect();
     merge_login_values(&mut store, &values);
     for profile in accounts {
-        if profile.account_name.trim().is_empty() { continue; }
+        if profile.account_name.trim().is_empty() || is_deleted(&store, &profile.account_name, &profile.steam_id64) { continue; }
         let key = matching_key(&store.accounts, &profile.account_name);
         let account = store.accounts.entry(key).or_default();
         if !profile.persona_name.trim().is_empty() {
@@ -638,6 +655,35 @@ mod tests {
         assert_eq!(data["accounts"]["other"]["future"], "kept");
         assert_eq!(data["backup"]["future"], "kept");
         assert_eq!(data["future_root"], 42);
+    }
+
+    #[test]
+    fn deleted_accounts_ignore_stale_profiles_times_and_backup_until_explicitly_readded() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        let profile = crate::SteamAccount { steam_id64:"76561197960265729".into(), account_name:"Player".into(),
+            persona_name:"Fixture".into(), auto_login:false, timestamp:100, favorite:false };
+        set_credential(&path, "player", "fixture password").unwrap();
+        merge_account_profiles(&path, &[profile.clone()]).unwrap();
+        write_backup(&path, &backup_fixture()).unwrap();
+        let stale = read_backup(&path).unwrap();
+        remove_account(&path, "PLAYER").unwrap();
+        let deleted = read_deleted_accounts(&path).unwrap();
+        assert_eq!(deleted["player"], BTreeSet::from([profile.steam_id64.clone()]));
+        merge_account_profiles(&path, &[profile.clone()]).unwrap();
+        merge_login_times(&path, &[(profile.steam_id64.clone(), String::new(), 200)]).unwrap();
+        write_backup(&path, &stale).unwrap();
+        assert!(read_accounts(&path).unwrap().iter().all(|account| !account.account_name.eq_ignore_ascii_case("player")));
+        assert!(!read_login_times(&path).unwrap().contains_key(&profile.steam_id64));
+        assert_eq!(read_deleted_accounts(&path).unwrap(), deleted);
+        let backup = read_backup(&path).unwrap();
+        assert!(backup["confirmed_credentials"].get("player").is_none());
+        assert!(backup["queue"].as_array().unwrap().iter().all(|entry| entry["account"] == "other"));
+        set_credential(&path, "pLaYeR", "new fixture password").unwrap();
+        merge_account_profiles(&path, &[profile]).unwrap();
+        assert!(read_deleted_accounts(&path).unwrap().is_empty());
+        assert_eq!(read_credentials(&path).unwrap()["player"], "new fixture password");
+        assert!(read_accounts(&path).unwrap().iter().any(|account| account.account_name == "player"));
     }
 
     #[test]

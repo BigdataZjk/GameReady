@@ -2,7 +2,7 @@
 
 Windows 游戏配置便携工具，支持 LOL 配置守护、LOL 与 Steam 账号管理，以及 NAS 账号备份。主程序为便携单 exe，已内置 WeGame 快速填入所需的 FakerInput 驱动安装包，首次使用可在程序内一键安装。
 
-当前版本：**v0.1.24** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
+当前版本：**v0.1.26** · [下载 EXE](https://github.com/BigdataZjk/GameReady/releases/latest/download/gameready.exe) · [更新记录](https://github.com/BigdataZjk/GameReady/releases)
 
 ## 下载与使用
 
@@ -27,6 +27,8 @@ Steam 的启动位置属于账号漫游设置；开启或关闭全局配置覆�
 Steam 账号列表直接读取 exe 同级 `Data/accounts.json`，换电脑或移动程序后，无需在本机先登录 Steam 即可显示全部保存账号；没有 SteamID 或密码的记录也会显示。本机 Steam 历史用于补全昵称、SteamID 和有效登录时间。账号按最近登录时间从新到旧显示，无法恢复的旧时间仍显示未知。账号行悬停时从右侧滑出「登录」「删除」，键盘聚焦也可操作。界面禁用默认右键菜单，仅账号行右键提供「复制账号」「复制密码」；复制密码使用 Data 保存的密码，缺失时会提示补充。点击「删除」直接清理所选账号的本地记录，无确认弹窗。
 
 点击账号前的星标可收藏或取消收藏；收藏状态随账号保存在 `Data/accounts.json`，迁移数据后仍然保留。
+
+删除其他 Steam 账号不会退出、重启 Steam 或打断当前登录；账号立即从列表移除，Steam 历史及该账号的 userdata 在 Steam 退出后（GameReady 运行期间，或下次由 GameReady 启动 Steam 前）清理。删除标记随 Data 保存，避免旧历史或缓存回写后重新出现；在新增登录栏重新提交该账号和密码可恢复添加。
 
 登录按钮前的「识别」会检查剪贴板中的单行账号密码，支持重复符号、空格分隔及「账号：… 密码：…」等格式；可识别时自适应显示，否则隐藏。点击仅填入账号和明文密码，登录需另点「登录」。
 

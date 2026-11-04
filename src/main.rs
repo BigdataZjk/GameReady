@@ -30,6 +30,7 @@ use windows::Win32::System::Threading::{GetCurrentProcess, WaitForSingleObject, 
 mod backup;
 mod backup_settings;
 mod account_store;
+mod steam_cleanup;
 mod lol_accounts;
 mod wegame;
 mod wegame_page;
@@ -763,9 +764,21 @@ fn run(app: tauri::AppHandle) {
     );
     let mut last: Option<(bool, bool, Option<String>)> = None; // 活动账号变化也要刷新列表
     let mut round: u32 = 0;
+    let mut cleanup_error = None;
     loop {
         sys.refresh_processes_specifics(ProcessRefreshKind::new());
         let (lol, steam) = scan(&sys);
+        if !steam {
+            if let Ok(_steam_op) = STEAM_OP.try_lock() {
+                if let Ok(root) = steam_root_or_err() {
+                    let error = steam_cleanup::clean_when_stopped(&root, &creds_path(), is_steam_running).err();
+                    if error != cleanup_error {
+                        if let Some(error) = &error { log("acct", "清理已删除账号缓存未完成", error, false); }
+                        cleanup_error = error;
+                    }
+                }
+            }
+        }
         let sid = steam.then(current_account_sid3).flatten();
         let cur = (lol, steam, sid);
         if round < WARMUP_ROUNDS || last.as_ref() != Some(&cur) {
@@ -1247,13 +1260,6 @@ fn vdf_path(root: &str) -> PathBuf {
     Path::new(root).join("config").join("loginusers.vdf")
 }
 
-/// 读注册表 HKCU\Software\Valve\Steam 的 AutoLoginUser（REG_SZ 账号名），失败返回 None
-fn registry_autologin_user() -> Option<String> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hkcu.open_subkey("Software\\Valve\\Steam").ok()?;
-    key.get_value::<String, _>("AutoLoginUser").ok()
-}
-
 /// 活跃账号必须属于指定 Steam 安装目录下仍在运行的客户端。
 fn active_steam_sid3(root: &str) -> Option<String> {
     let key = RegKey::predef(HKEY_CURRENT_USER)
@@ -1537,6 +1543,10 @@ fn kill_and_wait() -> Result<(), String> {
 
 /// 后台启动 Steam，隐藏控制台，不等待进程退出。
 pub fn launch_steam(root: &str, args: &[&str]) -> Result<(), String> {
+    // 切换账号时 watcher 无法取得 STEAM_OP；在启动前补做已删除账号的清理。
+    if let Err(error) = steam_cleanup::clean_when_stopped(root, &creds_path(), is_steam_running) {
+        log("acct", "清理已删除账号缓存未完成", &error, false);
+    }
     let exe = Path::new(root).join("steam.exe");
     Command::new(&exe)
         .args(args)
@@ -1937,70 +1947,50 @@ fn finish_login(attempt: &LoginAttempt, mut result: LoginResult, app: &AppHandle
     let _ = app.emit("steam-login-finished", result);
 }
 
-/// 只清理本机账号与 userdata；强杀避免退出回写复活账号，必要时恢复原会话。
-fn delete_locked(sid64: &str, name: Option<&str>) -> Result<String, String> {
+struct SteamDeletionRuntime;
+
+impl steam_cleanup::Runtime for SteamDeletionRuntime {
+    fn running(&self) -> bool { is_steam_running() }
+    fn stop(&mut self) -> Result<(), String> {
+        kill_steam_if_running();
+        if wait_steam_exit(10) { Ok(()) }
+        else { Err("Steam 未能在 10 秒内完全退出，请手动退出后再删除账号".into()) }
+    }
+    fn restart(&mut self, root: &str, account: &str) -> Result<(), String> {
+        registry_set_autologin_user(account)?;
+        relaunch_with_cred(root, account)
+    }
+    fn remove_record(&mut self, account: &str) -> Result<(), String> {
+        backup::remove_local_account(account).map_err(|error| error.message)
+    }
+}
+
+fn deletion_targets_pending_login(selected: &SteamAccount, pending: Option<&SteamProgress>) -> bool {
+    pending.is_some_and(|progress| progress.phase != "idle" &&
+        (progress.account_name.as_deref().is_some_and(|name| name.eq_ignore_ascii_case(&selected.account_name))
+            || (!selected.steam_id64.is_empty() && progress.sid64.as_deref() == Some(selected.steam_id64.as_str()))))
+}
+
+fn deletion_targets_session(selected: &SteamAccount, active: Option<&str>, pending: Option<&SteamProgress>) -> bool {
+    match active {
+        Some(active) => !selected.steam_id64.is_empty() && selected.steam_id64 == active,
+        None => deletion_targets_pending_login(selected, pending),
+    }
+}
+
+/// 删除其他账号不停止会话、不取消正在确认的登录；本机文件待 Steam 退出后清理。
+fn delete_locked(sid64: &str, name: Option<&str>, app: &AppHandle) -> Result<String, String> {
     let selected = select_portable_account(&portable_accounts()?, sid64, name)?;
     let root = steam_root_or_err().ok();
-    let mut accounts = match &root { Some(root) => login_history(root)?, None => Vec::new() };
-    let matching: Vec<_> = accounts.iter().enumerate().filter(|(_, account)| field(account, "AccountName")
-        .is_some_and(|name| name.eq_ignore_ascii_case(&selected.account_name))).map(|(index, _)| index).collect();
-    if matching.len() > 1 { return Err("Steam 账号记录重复，请检查 loginusers.vdf 后重试".into()); }
-    let index = matching.first().copied();
     let active = root.as_deref().and_then(active_steam_sid3).and_then(|sid| sid3_to_id64(&sid));
-    // 便携账号未在本机登录过时，仅清理 Data，不要求 Steam 路径，也不打断其他会话。
-    if index.is_none() && active.as_deref() != Some(selected.steam_id64.as_str()) {
-        backup::remove_local_account(&selected.account_name).map_err(|e| e.message)?;
-        return Ok(display_name(&selected.persona_name, &selected.account_name));
+    let pending = STEAM_PROGRESS.lock().unwrap().clone();
+    let current_session = deletion_targets_session(&selected, active.as_deref(), pending.as_ref());
+    if current_session || deletion_targets_pending_login(&selected, pending.as_ref()) {
+        let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        steam_progress_named(app, generation, "idle", "", None, None);
     }
-    let root = root.expect("本机账号记录有对应 Steam 目录");
-    // 杀 Steam 前锁定当前账号名（Steam 退出过程会临时清掉注册表 AutoLoginUser），
-    // 重启用它凭据直登恢复会话；被删的若是它则凭据已删，自然退化为无参启动
-    let autologin_before = registry_autologin_user().unwrap_or_default();
-    let removed = index.map(|index| to_account(&accounts.remove(index))).unwrap_or(selected);
-    let sid64 = removed.steam_id64.as_str();
-    let account_name = removed.account_name.clone();
-    let persona_name = removed.persona_name.clone();
-    if account_name.is_empty() {
-        return Err("该账号缺少 AccountName 字段，loginusers.vdf 可能已损坏".to_string());
-    }
-    let was_running = kill_steam_if_running();
-    if was_running && !wait_steam_exit(10) {
-        return Err("Steam 未能在 10 秒内完全退出，请手动退出后再删除账号".to_string());
-    }
-    let mut cleanup_errors = Vec::new();
-    {
-        let _times_op = LOGIN_TIMES_OP.lock().unwrap();
-        let write = if index.is_some() || vdf_path(&root).exists() { write_vdf(&root, &accounts) } else { Ok(()) };
-        if let Err(e) = write {
-            if was_running {
-                if let Err(recovery) = relaunch_with_cred(&root, &autologin_before) { log("steam", "恢复 Steam 失败", &recovery, false); }
-            }
-            return Err(e);
-        }
-    }
-    // 删除整个便携记录（含密码、回执和队列），避免下次按 Data 加载时重新出现。
-    if let Err(e) = backup::remove_local_account(&account_name) { cleanup_errors.push(e.message); }
-    // 删除该账号的 userdata 目录（含 localconfig.vdf 等）；不存在或删除失败不阻断流程
-    if let Some(sid3) = sid64_to_sid3(sid64) {
-        let ud = Path::new(&root).join("userdata").join(&sid3);
-        if let Err(e) = fs::remove_dir_all(ud) {
-            if e.kind() != std::io::ErrorKind::NotFound { cleanup_errors.push(format!("账号数据目录删除失败：{e}")); }
-        }
-    }
-    // 删除前 Steam 在运行 → 自动重启：被删的正是当前账号则无参启动（回选择页属预期），
-    // 否则凭据直登恢复原会话
-    if was_running {
-        let target = if account_name.eq_ignore_ascii_case(&autologin_before) {
-            ""
-        } else {
-            autologin_before.as_str()
-        };
-        if let Err(error) = relaunch_with_cred(&root, target) { cleanup_errors.push(format!("恢复 Steam 失败：{error}")); }
-    }
-    if !cleanup_errors.is_empty() {
-        return Err(format!("账号已从 Steam 列表移除，但部分清理未完成：{}", cleanup_errors.join("；")));
-    }
-    Ok(display_name(&persona_name, &account_name))
+    steam_cleanup::delete_selected(&selected, root.as_deref(), &creds_path(), current_session, &mut SteamDeletionRuntime)?;
+    Ok(display_name(&selected.persona_name, &selected.account_name))
 }
 
 // ---------------- Tauri 命令：统一在文件尾 mod commands（成功写日志 + 推 "steam-accounts-changed"） ----------------
@@ -3642,10 +3632,7 @@ pub async fn switch_account(sid64: String, account_name: Option<String>, app: Ap
 pub async fn delete_account(sid64: String, account_name: Option<String>, app: AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _steam_op = STEAM_OP.try_lock().map_err(|_| "Steam 正在应用操作，请稍候重试")?;
-        let generation = STEAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        steam_progress(&app, generation, "stopping", "正在清理本机 Steam 账号", Some(&sid64));
-        let result = delete_locked(&sid64, account_name.as_deref());
-        steam_progress(&app, generation, "idle", "", None);
+        let result = delete_locked(&sid64, account_name.as_deref(), &app);
         match &result {
             Ok(name) => log("acct", "删除 Steam 账号", &format!("已删除 {name}"), true),
             Err(error) => log("acct", "删除 Steam 账号未完成", error, false),

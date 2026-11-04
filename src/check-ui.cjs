@@ -876,10 +876,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.waitForFunction(() => document.querySelector('#coverBadge').textContent === '完成');
     assert.equal(await page.locator('#coverBtn').evaluate(el=>el.style.getPropertyValue('--p')),'100');
     console.log('PASS cover shows real completion rather than reaching 100% on a timer');
-    await page.evaluate(async()=>{
+    const sessionBeforeDeletion=await page.evaluate(async()=>{
       const f=window.backupFixture;
       f.accounts.push({steam_id64:'76561198000000009',account_name:'fixture_delete',persona_name:'Delete Fixture',timestamp:1728000000});
       await refreshAccounts();
+      return {sid:state.currentSid64,generation:steamGeneration,loginCalls:f.calls.filter(c=>['switch_account','login_new'].includes(c.command)).length};
     });
     const deletedCard=page.locator('#acctCards .acct[data-sid="76561198000000009"]');
     await deletedCard.hover();
@@ -890,7 +891,28 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(await page.evaluate(()=>window.backupFixture.calls.filter(c=>c.command==='delete_account').map(c=>c.args)),
       [{sid64:'76561198000000009',accountName:'fixture_delete'}]);
     assert.match(await page.locator('#tkTxt').textContent(),/已删除 fixture_delete/);
-    console.log('PASS account deletion executes once directly and refreshes the list without confirmation');
+    assert.deepEqual(await page.evaluate(()=>({sid:state.currentSid64,generation:steamGeneration,
+      loginCalls:window.backupFixture.calls.filter(c=>['switch_account','login_new'].includes(c.command)).length})),sessionBeforeDeletion);
+    assert.equal(await page.locator('#acctCards .acct.cur').getAttribute('data-sid'),sessionBeforeDeletion.sid);
+    console.log('PASS deleting another account preserves the current session and never starts a login request');
+
+    await page.evaluate(async()=>{
+      const f=window.backupFixture;
+      f.accounts.push({steam_id64:'76561198000000009',account_name:'fixture_delete',persona_name:'Delete Fixture',timestamp:1728000000});
+      f.operation={generation:++f.generation,phase:'waiting',message:'等待登录确认',sid64:f.accounts[0].steam_id64,account_name:f.accounts[0].account_name};
+      f.emit('steam-operation',f.operation);
+      await refreshAccounts();
+    });
+    const pendingBeforeDeletion=await page.evaluate(()=>structuredClone(steamOperation));
+    await deletedCard.hover();
+    await deletedCard.getByRole('button',{name:'删除',exact:true}).click();
+    await page.waitForFunction(()=>!delBusy && !document.querySelector('#acctCards .acct[data-account="fixture_delete"]'));
+    assert.deepEqual(await page.evaluate(()=>steamOperation),pendingBeforeDeletion);
+    assert.equal(await page.locator('#acctCards .acct[data-account="'+pendingBeforeDeletion.account_name.toLowerCase()+'"]').getByRole('button',{name:'登录中…',exact:true}).isDisabled(),true);
+    await page.evaluate(()=>{
+      const f=window.backupFixture;f.operation={...f.operation,phase:'idle',message:''};f.emit('steam-operation',f.operation);
+    });
+    console.log('PASS deleting another account also preserves a pending login confirmation');
 
     await page.evaluate(async()=>{
       const f=window.backupFixture;

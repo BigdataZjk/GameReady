@@ -1267,7 +1267,7 @@ function accountOperationTarget(account){
   return !!sid64 && steamOperation.sid64===String(sid64);
 }
 function accountLoginPending(account){
-  return accountOperationTarget(account) && steamOperation.phase !== 'idle' && !delBusy && !coverBusy;
+  return accountOperationTarget(account) && steamOperation.phase !== 'idle' && !coverBusy;
 }
 function acceptSteamGeneration(generation){
   if(!Number.isFinite(generation) || generation < Math.max(steamGeneration,steamRequestGeneration)) return false;
@@ -1500,13 +1500,14 @@ async function doDelete(a){
   if(!hasTauri){ toast(NO_TAURI_MSG, 'err'); return; }
   delBusy = true;
   const sid = String(a.steam_id64 || '');
-  beginSteamOperation('正在删除本机账号 '+displayName(a)+'…',sid,a.account_name);
+  toast('正在删除本机账号 '+displayName(a)+'…',null,true);
+  renderAccountsPage();
   try{
     const name = await invoke('delete_account', { sid64: sid, accountName:a.account_name });
     if(state.currentSid64 === a.steam_id64) state.currentSid64 = null;   // 删的是当前账号
     toast('已删除 '+(name || displayName(a)), 'ok');
   }catch(e){ toast('删除失败：'+errText(e), 'err'); }
-  finally{ delBusy = false; endSteamRequest(); }
+  finally{ delBusy = false; renderAccountsPage(); }
   refreshAccounts();
   refreshStatus().catch(()=>{});
 }
